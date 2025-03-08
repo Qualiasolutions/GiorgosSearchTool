@@ -71,6 +71,50 @@ class AdvancedScraper:
             'Upgrade-Insecure-Requests': '1',
         }
     
+    # New method to validate URLs
+    def validate_url(self, url: str) -> bool:
+        """
+        Validates if a URL is properly formatted and potentially valid
+        
+        Args:
+            url: URL string to validate
+            
+        Returns:
+            bool: True if URL appears valid, False otherwise
+        """
+        if not url or not isinstance(url, str):
+            return False
+            
+        # Basic URL structure validation
+        try:
+            result = urlparse(url)
+            # Check if scheme and netloc are present
+            return all([result.scheme in ('http', 'https'), result.netloc])
+        except:
+            return False
+    
+    # New method for deeper URL validation that can be used in background tasks
+    def verify_url_accessibility(self, url: str, timeout: int = 5) -> bool:
+        """
+        Verifies if a URL is actually accessible by making a HEAD request
+        
+        Args:
+            url: URL to verify
+            timeout: Request timeout in seconds
+            
+        Returns:
+            bool: True if URL is accessible, False otherwise
+        """
+        if not self.validate_url(url):
+            return False
+            
+        try:
+            # Use a HEAD request to minimize bandwidth usage
+            response = requests.head(url, timeout=timeout, allow_redirects=True)
+            return response.status_code < 400  # Any 2xx or 3xx status code
+        except:
+            return False
+    
     def scrape_with_api(self, url, country_code=None, render_js=True, retry_count=2, timeout=30, 
                       premium=False, session_id=None, device_type='desktop'):
         """
@@ -404,86 +448,78 @@ class AdvancedScraper:
         parser = self.get_parser(site)
         return parser(html)
     
-    def parse_amazon(self, html):
-        """Parse Amazon product listings"""
+    def parse_amazon(self, html, base_url="https://www.amazon.com"):
+        """Parse Amazon search results"""
+        soup = BeautifulSoup(html, 'lxml')
         products = []
-        try:
-            soup = BeautifulSoup(html, 'lxml')
-            
-            # Find all product containers
-            results = soup.select('div[data-component-type="s-search-result"]')
-            logger.info(f"Found {len(results)} Amazon products")
-            
-            for item in results:
-                try:
-                    # Extract core product data
-                    asin = item.get('data-asin', '')
-                    
-                    # Title
-                    title_element = item.select_one('h2 a span')
-                    title = title_element.text.strip() if title_element else "Unknown Product"
-                    
-                    # URL
-                    link_element = item.select_one('h2 a')
-                    url = "https://www.amazon.com" + link_element.get('href', '') if link_element else ""
-                    
-                    # Image
-                    img_element = item.select_one('img.s-image')
-                    img_url = img_element.get('src', '') if img_element else ""
-                    
-                    # Prices
-                    price_element = item.select_one('.a-price .a-offscreen')
-                    price_text = price_element.text.strip() if price_element else ""
-                    price = float(re.sub(r'[^\d.]', '', price_text)) if price_text and re.search(r'\d', price_text) else 0
-                    
-                    original_price_element = item.select_one('.a-price.a-text-price .a-offscreen')
-                    original_price_text = original_price_element.text.strip() if original_price_element else ""
-                    original_price = float(re.sub(r'[^\d.]', '', original_price_text)) if original_price_text and re.search(r'\d', original_price_text) else None
-                    
-                    # Ratings
-                    rating_element = item.select_one('i.a-icon-star-small')
-                    rating_text = rating_element.text.strip() if rating_element else ""
-                    rating = float(rating_text.split(' ')[0]) if rating_text and ' ' in rating_text else None
-                    
-                    review_count_element = item.select_one('span.a-size-base.s-underline-text')
-                    review_count_text = review_count_element.text.strip() if review_count_element else ""
-                    review_count = int(re.sub(r'[^\d]', '', review_count_text)) if review_count_text and re.search(r'\d', review_count_text) else 0
-                    
-                    # Prime/Free shipping
-                    prime_element = item.select_one('i.a-icon-prime')
-                    free_shipping = True if prime_element else False
-                    
-                    # Calculate discount
-                    discount_percentage = None
-                    if original_price and price and original_price > price:
-                        discount_percentage = round(((original_price - price) / original_price) * 100, 1)
-                    
-                    product = {
-                        'id': f"amazon_{asin}",
-                        'title': title,
-                        'url': url,
-                        'image': img_url,
-                        'price': price,
-                        'currency': 'USD',  # Default, could be extracted from page
-                        'original_price': original_price,
-                        'discount_percentage': discount_percentage,
-                        'rating': rating,
-                        'review_count': review_count,
-                        'free_shipping': free_shipping,
-                        'site': 'amazon',
-                        'in_stock': price > 0,
-                        'seller': 'Amazon' if free_shipping else None
-                    }
-                    
-                    products.append(product)
-                except Exception as e:
-                    logger.error(f"Error parsing Amazon product: {str(e)}")
+        
+        # Parse products
+        for item in soup.select('[data-component-type="s-search-result"]'):
+            try:
+                link_elem = item.select_one('h2 a')
+                if not link_elem:
                     continue
-            
-        except Exception as e:
-            logger.error(f"Error parsing Amazon page: {str(e)}")
-            
-        return products
+                
+                url_part = link_elem.get('href', '')
+                if not url_part:
+                    continue
+                
+                product_url = urljoin(base_url, url_part)
+                
+                # Validate URL before proceeding
+                if not self.validate_url(product_url):
+                    continue
+                
+                # Continue with the rest of the parsing logic
+                title = link_elem.get_text().strip()
+                
+                # Parse price
+                price_elem = item.select_one('.a-price .a-offscreen')
+                price = None
+                if price_elem:
+                    price_text = price_elem.get_text().strip()
+                    # Clean and convert price
+                    price = self.extract_price(price_text)
+                
+                # Parse rating
+                rating_elem = item.select_one('i.a-icon-star-small')
+                rating = None
+                if rating_elem:
+                    rating_text = rating_elem.get_text().strip()
+                    try:
+                        # Extract rating value (e.g. "4.5 out of 5 stars" -> 4.5)
+                        rating = float(re.search(r'(\d+(\.\d+)?)', rating_text).group(1))
+                    except:
+                        pass
+                
+                # Parse review count
+                reviews_elem = item.select_one('span[aria-label$="stars"]')
+                review_count = None
+                if reviews_elem:
+                    try:
+                        review_count = int(re.sub(r'[^\d]', '', reviews_elem.get('aria-label', '0')))
+                    except:
+                        pass
+                
+                # Create product object
+                product = {
+                    'id': hashlib.md5(f"{title}-{product_url}".encode()).hexdigest(),
+                    'title': title,
+                    'url': product_url,
+                    'price': price,
+                    'currency': 'USD',  # Default currency
+                    'image': self.extract_image_url(item),
+                    'rating': rating,
+                    'review_count': review_count,
+                    'site': 'Amazon',
+                    'is_sponsored': 'Sponsored' in item.get_text()
+                }
+                
+                products.append(product)
+            except Exception as e:
+                logger.error(f"Error parsing Amazon product: {str(e)}")
+        
+        return ScraperResult(products=products, total_products=len(products))
     
     def parse_ebay(self, html):
         """Parse eBay product listings"""
@@ -1798,106 +1834,128 @@ class AdvancedScraper:
             
         return products
     
-    def parse_generic(self, html, site):
-        """Generic parser for other e-commerce sites"""
+    def parse_generic(self, html, base_url=""):
+        """Generic parser for sites without a specific implementation"""
+        soup = BeautifulSoup(html, 'lxml')
         products = []
-        try:
-            soup = BeautifulSoup(html, 'lxml')
-            
-            # Try different product container selectors
-            potential_product_selectors = [
-                'div.product', 'div.item', 'li.product', 'li.item', 
-                'div[class*="product"]', 'div[class*="item"]',
-                'div[data-product]', 'div[data-item]'
-            ]
-            
-            # Find all product elements
-            product_elements = []
-            for selector in potential_product_selectors:
-                elements = soup.select(selector)
-                if elements:
-                    product_elements = elements
-                    logger.info(f"Found {len(elements)} products with selector '{selector}' for site {site}")
-                    break
-            
-            if not product_elements:
-                logger.warning(f"No product elements found for {site}")
+        
+        # Try to detect product listing elements
+        product_elements = soup.select('div[class*="product"], li[class*="product"], div[class*="item"], li[class*="item"]')
+        
+        if not product_elements:
+            logger.warning("No product elements found with generic parser")
+            return ScraperResult(products=[], success=True, error_message="No products found")
+        
+        for item in product_elements[:10]:  # Limit to first 10 products
+            try:
+                # Find title and URL
+                link_elem = item.find('a', href=True)
+                title_elem = item.find(['h2', 'h3', 'h4', 'h5', 'div', 'span'], class_=lambda c: c and any(x in c.lower() for x in ['title', 'name', 'product']))
                 
-                # Extract some basic info from the page as fallback
-                title_element = soup.select_one('title')
-                title_text = title_element.text if title_element else f"Content from {site}"
-                
-                # Create a single fallback product with page info
-                products.append({
-                    'id': f"{site}_generic_{hash(title_text) % 10000}",
-                    'title': title_text,
-                    'url': f"https://www.{site}.com",
-                    'image': f"https://via.placeholder.com/150?text={site}",
-                    'price': 0,
-                    'currency': 'USD',
-                    'site': site,
-                    'in_stock': False
-                })
-                
-                return products
-            
-            # Process product elements
-            for element in product_elements[:10]:  # Limit to first 10
-                try:
-                    # Generate a unique ID based on content
-                    element_text = element.text[:100]
-                    item_id = f"{site}_{hash(element_text) % 100000}"
-                    
-                    # Title - try different selectors
-                    title_element = (
-                        element.select_one('.product-title, .item-title, .title, .name, h2, h3, h4') or
-                        element.select_one('[class*="title"], [class*="name"]')
-                    )
-                    title = title_element.text.strip() if title_element else f"Product from {site}"
-                    
-                    # URL
-                    link_element = element.select_one('a')
-                    path = link_element.get('href', '') if link_element else ""
-                    url = path if path.startswith('http') else urljoin(f"https://www.{site}.com", path)
-                    
-                    # Image
-                    img_element = element.select_one('img')
-                    img_url = img_element.get('src', '') if img_element else ""
-                    if img_url and not img_url.startswith('http'):
-                        img_url = urljoin(f"https://www.{site}.com", img_url)
-                    
-                    # Price - try different selectors
-                    price_element = (
-                        element.select_one('.price, .current-price, [class*="price"]') or
-                        element.select_one('span:contains($), span:contains(€)')
-                    )
-                    price_text = price_element.text.strip() if price_element else ""
-                    price_match = re.search(r'(\d+(\.\d+)?)', price_text)
-                    price = float(price_match.group(1)) if price_match else 0
-                    
-                    # Try to extract currency
-                    currency_match = re.search(r'(\$|€|£|¥)', price_text)
-                    currency = currency_match.group(1) if currency_match else 'USD'
-                    currency_map = {'$': 'USD', '€': 'EUR', '£': 'GBP', '¥': 'JPY'}
-                    currency = currency_map.get(currency, 'USD')
-                    
-                    product = {
-                        'id': item_id,
-                        'title': title,
-                        'url': url,
-                        'image': img_url,
-                        'price': price,
-                        'currency': currency,
-                        'site': site,
-                        'in_stock': True if price > 0 else False
-                    }
-                    
-                    products.append(product)
-                except Exception as e:
-                    logger.error(f"Error parsing generic product from {site}: {str(e)}")
+                if not (link_elem and title_elem):
                     continue
-                    
-        except Exception as e:
-            logger.error(f"Error parsing generic page from {site}: {str(e)}")
+                
+                product_url = urljoin(base_url, link_elem['href'])
+                
+                # Validate URL before proceeding
+                if not self.validate_url(product_url):
+                    continue
+                
+                title = title_elem.get_text().strip()
+                
+                # Find price
+                price_elem = item.find(text=re.compile(r'(\$|€|£|¥)\s*\d+(\.\d+)?'))
+                price = None
+                if price_elem:
+                    price = self.extract_price(price_elem)
+                
+                # Find image
+                img_elem = item.find('img')
+                image_url = None
+                if img_elem:
+                    image_url = img_elem.get('src', img_elem.get('data-src'))
+                    if image_url:
+                        image_url = urljoin(base_url, image_url)
+                
+                # Create product object
+                product = {
+                    'id': hashlib.md5(f"{title}-{product_url}".encode()).hexdigest(),
+                    'title': title,
+                    'url': product_url,
+                    'price': price,
+                    'currency': self.detect_currency(html),
+                    'image': image_url,
+                    'rating': None,
+                    'review_count': None,
+                    'site': urlparse(base_url).netloc,
+                    'is_sponsored': False
+                }
+                
+                products.append(product)
+            except Exception as e:
+                logger.error(f"Error parsing generic product: {str(e)}")
+        
+        return ScraperResult(products=products, total_products=len(products))
+        
+    # Improved price extraction to handle different formats
+    def extract_price(self, price_text):
+        if not price_text:
+            return None
             
-        return products 
+        try:
+            # Remove currency symbols and non-numeric chars except decimal point
+            price_text = re.sub(r'[^\d.,]', '', price_text)
+            # Handle various separators
+            if ',' in price_text and '.' in price_text:
+                if price_text.rindex(',') > price_text.rindex('.'):
+                    # European format: 1.234,56
+                    price_text = price_text.replace('.', '').replace(',', '.')
+                else:
+                    # US/UK format: 1,234.56
+                    price_text = price_text.replace(',', '')
+            elif ',' in price_text and '.' not in price_text:
+                # Could be European decimal: 1234,56
+                price_text = price_text.replace(',', '.')
+                
+            # Final cleanup and conversion
+            return float(re.sub(r'[^\d.]', '', price_text))
+        except Exception as e:
+            logger.error(f"Price conversion error: {str(e)} for text: {price_text}")
+            return None
+    
+    # Helper methods
+    def extract_image_url(self, item):
+        img_elem = item.select_one('img[srcset], img[data-srcset], img[src], img[data-src]')
+        if not img_elem:
+            return None
+            
+        # Try different image attributes
+        for attr in ['srcset', 'data-srcset', 'src', 'data-src']:
+            url = img_elem.get(attr)
+            if url:
+                # For srcset, extract the highest resolution image
+                if attr in ['srcset', 'data-srcset']:
+                    try:
+                        srcset = url.split(',')
+                        highest_res = srcset[-1].strip().split(' ')[0]
+                        return highest_res
+                    except:
+                        pass
+                return url
+        return None
+        
+    def detect_currency(self, html):
+        currency_patterns = {
+            '$': 'USD',
+            '€': 'EUR',
+            '£': 'GBP',
+            '¥': 'JPY',
+            'USD': 'USD',
+            'EUR': 'EUR',
+            'GBP': 'GBP'
+        }
+        
+        for symbol, code in currency_patterns.items():
+            if symbol in html:
+                return code
+        return 'USD'  # Default

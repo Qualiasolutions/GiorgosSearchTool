@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# Increase the default timeout values
+DEFAULT_REQUEST_TIMEOUT = 60  # Increased from 30 to 60 seconds
+PARALLEL_REQUESTS_TIMEOUT = 90  # Added for parallel requests
+
 # Initialize OpenAI client
 client = None
 if OPENAI_API_KEY:
@@ -50,6 +54,42 @@ if HAVE_SENTENCE_TRANSFORMERS:
 
 # Scraper API endpoint
 SCRAPER_API_URL = f"http://api.scraperapi.com/?api_key={SCRAPER_API_KEY}&url="
+
+# Function to implement URL validation for search results
+def validate_search_results(products: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Validate product URLs and filter out invalid ones
+    
+    Args:
+        products: List of product dictionaries
+        
+    Returns:
+        List of products with valid URLs
+    """
+    validated_products = []
+    
+    for product in products:
+        # Check if URL is present and properly formatted
+        url = product.get('url')
+        if not url or not isinstance(url, str):
+            continue
+            
+        # Basic URL structure validation
+        try:
+            # Check if URL has a scheme and domain
+            if not (url.startswith('http://') or url.startswith('https://')):
+                continue
+                
+            # Ensure there's a domain
+            if '.' not in url.split('/')[2]:
+                continue
+                
+            # Add the validated product
+            validated_products.append(product)
+        except:
+            continue
+    
+    return validated_products
 
 @dataclass
 class ProductEntity:
@@ -100,152 +140,353 @@ def search_products(query, region='global', max_price=None, min_price=None,
         page (int): Page number for pagination
         limit (int): Number of results per page
         advanced_matching (bool): Whether to use advanced product matching
-        use_openai (bool): Whether to enhance search with OpenAI
-        natural_language (bool): Whether to process the query as natural language
-        
-    Returns:
-        dict: Search results including best deals and all products
-    """
-    if not SCRAPER_API_KEY:
-        raise ValueError("SCRAPER_API_KEY is not set")
+        use_openai (bool): Whether to use OpenAI for query enhancement
+        natural_language (bool): Whether to process natural language queries
     
+    Returns:
+        dict: Search results with matched products
+    """
     start_time = time.time()
-    all_results = []
-    sites = get_sites_for_region(region)
     
     # Process natural language query if enabled
     processed_query = query
-    search_context = {}
-    category_hints = []
+    if natural_language and use_openai and client:
+        try:
+            processed_query = process_natural_language_query(query)
+            logger.info(f"Processed natural language query: '{query}' → '{processed_query}'")
+        except Exception as e:
+            logger.error(f"Error processing natural language query: {str(e)}")
     
-    if natural_language and client and use_openai:
-        processed_query, search_context = process_natural_language_query(query)
-        category_hints = search_context.get('categories', [])
-        logger.info(f"Processed natural language query: '{query}' → '{processed_query}'")
+    # Determine which sites to search based on region
+    sites = get_sites_for_region(region)
+    
+    # Search all sites in parallel
+    all_products = search_multiple_sites(processed_query, sites)
+    
+    # Validate product URLs
+    all_products = validate_search_results(all_products)
+    
+    # Log the number of products found
+    logger.info(f"Collected {len(all_products)} total products from {len(sites)} sites")
+    
+    # Deduplicate products if advanced matching is enabled
+    if advanced_matching:
+        all_products = deduplicate_products(all_products)
+        logger.info(f"After deduplication: {len(all_products)} products")
+    
+    # Apply filters
+    filtered_products = filter_products(all_products, min_price, max_price)
+    
+    # Sort products
+    sorted_products = sort_products(filtered_products, sort_by)
+    
+    # Apply pagination
+    paginated_products = paginate_results(sorted_products, page, limit)
+    
+    # Compute search time
+    search_time = time.time() - start_time
+    logger.info(f"Search completed in {search_time:.2f} seconds")
+    
+    # Return results
+    return {
+        'products': paginated_products,
+        'total_results': len(filtered_products),
+        'page': page,
+        'limit': limit,
+        'search_time': round(search_time, 2),
+        'query': processed_query
+    }
+
+def search_multiple_sites(query, sites):
+    """Search multiple e-commerce sites in parallel"""
+    all_products = []
+    
+    with ThreadPoolExecutor(max_workers=len(sites)) as executor:
+        future_to_site = {
+            executor.submit(search_site, query, site): site 
+            for site in sites
+        }
+        
+        for future in as_completed(future_to_site, timeout=PARALLEL_REQUESTS_TIMEOUT):
+            site = future_to_site[future]
+            try:
+                products = future.result()
+                all_products.extend(products)
+            except Exception as e:
+                logger.error(f"Error scraping {site}: {str(e)}")
+    
+    return all_products
+
+def search_site(query, site):
+    """Search a specific e-commerce site"""
+    from .advanced_scraper import AdvancedScraper
+    
+    encoded_query = quote(query)
+    scraper = AdvancedScraper(api_key=SCRAPER_API_KEY)
+    
+    # Country-specific logic
+    country_code = None
+    if site == 'amazon.co.uk':
+        logger.info("Using country proxy: gb")
+        country_code = 'gb'
+    elif site == 'amazon.de':
+        logger.info("Using country proxy: de")
+        country_code = 'de'
+    elif site == 'rakuten':
+        logger.info("Using country proxy: jp")
+        country_code = 'jp'
+    
+    # Construct the search URL
+    url = construct_search_url(site, encoded_query)
     
     try:
-        # Multi-threaded scraping of all sites
-        with ThreadPoolExecutor(max_workers=min(8, len(sites))) as executor:
-            future_to_site = {
-                executor.submit(
-                    scrape_site, 
-                    site, 
-                    processed_query, 
-                    min_price, 
-                    max_price, 
-                    page
-                ): site for site in sites
-            }
+        # Log the site being searched
+        logger.info(f"Searching {site} for '{query}' via Scraper API")
+        
+        # Fetch HTML content
+        html = scraper.scrape_with_api(
+            url, 
+            country_code=country_code,
+            render_js=True,
+            timeout=DEFAULT_REQUEST_TIMEOUT
+        )
+        
+        if not html:
+            logger.warning(f"No HTML content returned from {site}")
+            return []
             
-            for future in as_completed(future_to_site):
-                site = future_to_site[future]
-                try:
-                    site_results = future.result()
-                    if site_results:
-                        all_results.extend(site_results)
-                        logger.info(f"Added {len(site_results)} products from {site}")
-                except Exception as e:
-                    logger.error(f"Error scraping {site}: {str(e)}")
+        logger.info(f"Successfully received response from {site}")
         
-        logger.info(f"Collected {len(all_results)} total products from {len(sites)} sites")
+        # Parse the HTML using the appropriate parser
+        parser = scraper.get_parser(site)
+        result = parser(html, base_url=url)
         
-        # Perform advanced product matching and deduplication if enabled
-        if advanced_matching and len(all_results) > 1:
-            all_results = match_and_deduplicate_products(all_results, processed_query)
-            logger.info(f"After deduplication: {len(all_results)} products")
-        
-        # Enhance with OpenAI if available
-        if client and use_openai and all_results:
-            enhanced_results = enhance_with_openai(all_results, processed_query, search_context)
+        # Extract products from the parser result
+        products = []
+        if hasattr(result, 'products'):
+            products = result.products
         else:
-            enhanced_results = enhance_products(all_results, processed_query, category_hints)
+            products = result
+            
+        if not products:
+            logger.warning(f"No products found for {site}, generating some basic data from content")
+            # Generate a placeholder product with site info
+            products = [{
+                'id': f"{site}_generic_{int(time.time())}",
+                'title': f"Product from {site} matching '{query}'",
+                'url': url,
+                'price': None,
+                'currency': 'USD',
+                'image': f"https://via.placeholder.com/150?text={site}",
+                'site': site,
+                'is_placeholder': True
+            }]
         
-        # Calculate search relevance scores
-        scored_results = calculate_relevance_scores(enhanced_results, processed_query, search_context)
+        # Add site identifier to products
+        for product in products:
+            product['site'] = site
         
-        # Find best deals
-        best_deals = find_best_deals(scored_results)
+        logger.info(f"Added {len(products)} products from {site}")
+        return products
         
-        # Sort results based on sort_by parameter
-        sorted_results = sort_results(scored_results, sort_by)
-        
-        # Apply pagination
-        paginated_results = sorted_results[(page-1)*limit:page*limit]
-        
-        # Calculate execution time
-        execution_time = time.time() - start_time
-        logger.info(f"Search completed in {execution_time:.2f} seconds")
-        
-        return {
-            "query": query,
-            "processed_query": processed_query if processed_query != query else None,
-            "total_results": len(enhanced_results),
-            "page": page,
-            "limit": limit,
-            "execution_time": round(execution_time, 2),
-            "best_deals": best_deals[:5],  # Top 5 best deals
-            "products": paginated_results,
-            "search_context": search_context,
-            "facets": generate_facets(enhanced_results)
-        }
-    
     except Exception as e:
-        logger.error(f"Error searching products: {str(e)}")
-        raise
+        logger.error(f"Error scraping {site}: {str(e)}")
+        return []
+
+def construct_search_url(site, encoded_query):
+    """Construct search URL for a specific site"""
+    if site == 'amazon':
+        return f"https://www.amazon.com/s?k={encoded_query}"
+    elif site == 'amazon.co.uk':
+        return f"https://www.amazon.co.uk/s?k={encoded_query}"
+    elif site == 'amazon.de':
+        return f"https://www.amazon.de/s?k={encoded_query}"
+    elif site == 'ebay':
+        return f"https://www.ebay.com/sch/i.html?_nkw={encoded_query}&_pgn=1"
+    elif site == 'walmart':
+        return f"https://www.walmart.com/search?q={encoded_query}"
+    elif site == 'aliexpress':
+        return f"https://www.aliexpress.com/wholesale?SearchText={encoded_query}"
+    elif site == 'rakuten':
+        return f"https://search.rakuten.co.jp/search/mall/{encoded_query}"
+    else:
+        # Generic search URL format
+        return f"https://www.{site}.com/search?q={encoded_query}"
+
+def get_sites_for_region(region):
+    """Get list of e-commerce sites for a specific region"""
+    sites = []
+    
+    # Global sites
+    if region == 'global' or region == 'us':
+        sites.extend(['amazon', 'ebay', 'walmart', 'aliexpress'])
+    
+    # Region-specific sites
+    if region == 'uk' or region == 'global':
+        sites.append('amazon.co.uk')
+    
+    if region == 'de' or region == 'eu' or region == 'global':
+        sites.append('amazon.de')
+    
+    if region == 'jp' or region == 'global':
+        sites.append('rakuten')
+    
+    # Ensure we have at least some sites
+    if not sites:
+        sites = ['amazon', 'ebay']
+    
+    return sites
 
 def process_natural_language_query(query):
-    """
-    Process natural language search queries using OpenAI
-    
-    Args:
-        query (str): Natural language query like "best laptop under $1000"
-        
-    Returns:
-        tuple: (processed_query, context_dict)
-    """
+    """Process natural language query using OpenAI"""
     if not client:
-        return query, {}
-    
+        return query
+        
     try:
-        # Use OpenAI to analyze the query
+        system_prompt = """
+        You are a shopping assistant. Your task is to convert natural language shopping queries into effective search terms.
+        Extract the core product information, including:
+        - Product name
+        - Important specifications
+        - Remove unnecessary words
+        - Correct spelling mistakes
+        
+        Return ONLY the optimized search terms without any explanation.
+        """
+        
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": """You are a search query analyzer for e-commerce product search. 
-                Extract the core product keywords, price range, and categories from natural language queries.
-                Respond with a JSON object containing:
-                1. 'keywords': The core product search terms
-                2. 'min_price': Extracted minimum price (number or null)
-                3. 'max_price': Extracted maximum price (number or null)
-                4. 'categories': Likely product categories
-                5. 'brands': Any mentioned brands
-                6. 'attributes': Important product attributes mentioned"""},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": query}
             ],
-            temperature=0.1,
-            response_format={"type": "json_object"}
+            temperature=0.3,
+            max_tokens=100
         )
         
-        # Extract the analysis
-        try:
-            analysis = json.loads(response.choices[0].message.content)
-            
-            # Extract the processed query (keywords)
-            processed_query = analysis.get('keywords', query)
-            
-            # Include full original query if keywords are significantly shorter
-            if len(processed_query) < len(query) * 0.5:
-                processed_query = query
-            
-            return processed_query, analysis
-            
-        except json.JSONDecodeError:
-            logger.error("Failed to parse OpenAI response as JSON")
-            return query, {}
-            
+        processed_query = response.choices[0].message.content.strip()
+        return processed_query
     except Exception as e:
-        logger.error(f"Error in process_natural_language_query: {str(e)}")
-        return query, {}
+        logger.error(f"Error using OpenAI: {str(e)}")
+        return query
+
+def deduplicate_products(products):
+    """Remove duplicate products across different sites"""
+    if not products:
+        return []
+        
+    # Use SentenceTransformer if available
+    if sentence_model and HAVE_SENTENCE_TRANSFORMERS:
+        return deduplicate_with_embeddings(products)
+    else:
+        return deduplicate_with_text_similarity(products)
+
+def deduplicate_with_embeddings(products):
+    """Use embeddings to identify similar products"""
+    from tqdm import tqdm
+    
+    unique_products = []
+    titles = [p['title'] for p in products]
+    
+    # Generate embeddings for all titles
+    embeddings = sentence_model.encode(titles, convert_to_tensor=True)
+    
+    # Convert to numpy for easier processing
+    embeddings_np = embeddings.cpu().numpy()
+    
+    # Compute similarity matrix
+    similarity_matrix = np.matmul(embeddings_np, embeddings_np.T)
+    
+    # Track which products have been added
+    added_indices = set()
+    
+    # First pass: add products with highest similarity scores
+    for i in tqdm(range(len(products)), desc="Batches"):
+        if i in added_indices:
+            continue
+            
+        # Find similar products
+        similar_indices = []
+        for j in range(len(products)):
+            if i != j and similarity_matrix[i, j] > 0.85:  # Similarity threshold
+                similar_indices.append(j)
+        
+        # Add this product
+        unique_products.append(products[i])
+        added_indices.add(i)
+        
+        # Mark similar products as added
+        for j in similar_indices:
+            added_indices.add(j)
+    
+    return unique_products
+
+def deduplicate_with_text_similarity(products):
+    """Use text similarity for deduplication when embeddings aren't available"""
+    unique_products = []
+    
+    for product in products:
+        is_duplicate = False
+        title1 = product.get('title', '').lower()
+        
+        for unique_product in unique_products:
+            title2 = unique_product.get('title', '').lower()
+            
+            # Calculate text similarity
+            similarity = difflib.SequenceMatcher(None, title1, title2).ratio()
+            
+            if similarity > 0.8:  # High similarity threshold
+                is_duplicate = True
+                break
+                
+        if not is_duplicate:
+            unique_products.append(product)
+    
+    return unique_products
+
+def filter_products(products, min_price=None, max_price=None):
+    """Apply filters to products"""
+    filtered = []
+    
+    for product in products:
+        # Skip products without price if filters are applied
+        if (min_price is not None or max_price is not None) and product.get('price') is None:
+            continue
+            
+        # Apply price filters
+        if min_price is not None and product.get('price', 0) < float(min_price):
+            continue
+        if max_price is not None and product.get('price', 0) > float(max_price):
+            continue
+            
+        filtered.append(product)
+    
+    return filtered
+
+def sort_products(products, sort_by):
+    """Sort products based on criteria"""
+    if sort_by == 'price_asc':
+        # Handle None prices by putting them at the end
+        return sorted(products, key=lambda p: (p.get('price') is None, p.get('price', float('inf'))))
+    elif sort_by == 'price_desc':
+        # Handle None prices by putting them at the end
+        return sorted(products, key=lambda p: (p.get('price') is None, -p.get('price', 0) if p.get('price') is not None else float('-inf')))
+    elif sort_by == 'rating':
+        # Handle None ratings by putting them at the end
+        return sorted(products, key=lambda p: (p.get('rating') is None, -p.get('rating', 0) if p.get('rating') is not None else float('-inf')))
+    elif sort_by == 'discount':
+        # Sort by discount percentage
+        return sorted(products, key=lambda p: (p.get('discount_percentage') is None, -p.get('discount_percentage', 0) if p.get('discount_percentage') is not None else 0))
+    else:
+        # Default: sort by relevance (return as is)
+        return products
+
+def paginate_results(products, page, limit):
+    """Apply pagination to results"""
+    start_idx = (page - 1) * limit
+    end_idx = start_idx + limit
+    
+    return products[start_idx:end_idx]
 
 def match_and_deduplicate_products(products, query):
     """
@@ -914,32 +1155,6 @@ def generate_facets(products):
         "sources": [{"name": k, "count": v} for k, v in sorted(sources.items(), key=lambda x: x[1], reverse=True)],
         "ratings": [{"label": k.replace("_", " "), "count": v} for k, v in ratings.items() if v > 0]
     }
-
-def get_sites_for_region(region):
-    """Get list of e-commerce sites based on region."""
-    # Default sites available globally
-    global_sites = ['amazon', 'ebay', 'walmart']
-    
-    # Region-specific sites
-    region_sites = {
-        'us': ['bestbuy', 'target'] + global_sites,
-        'eu': ['amazon.co.uk', 'amazon.de', 'amazon.fr', 'amazon.it', 'zalando', 'asos', 'ebay.co.uk'] + global_sites,
-        'cn': ['aliexpress', 'jd', 'taobao', 'alibaba'] + global_sites,
-        'ar': ['mercadolibre', 'amazon'] + global_sites,
-        'in': ['flipkart', 'amazon.in', 'snapdeal'] + global_sites,
-        'jp': ['rakuten', 'amazon.co.jp', 'yahoo.co.jp'] + global_sites,
-        'kr': ['coupang', 'gmarket'] + global_sites,
-        'br': ['americanas', 'mercadolivre'] + global_sites,
-        'ru': ['ozon', 'wildberries'] + global_sites,
-        'gr': ['skroutz', 'public.gr', 'kotsovolos', 'amazon.de'] + global_sites,
-        'global': ['amazon', 'ebay', 'walmart', 'aliexpress', 'amazon.co.uk', 'amazon.de', 'rakuten']
-    }
-    
-    # If it's a global search, include a broader range of sites
-    if region == 'global':
-        return region_sites['global']
-    
-    return region_sites.get(region, global_sites)
 
 def scrape_site(site, query, price_min=None, price_max=None, page=1):
     """Scrape product data from a specific e-commerce site."""
