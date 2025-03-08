@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { SearchParams, SearchResults, Region } from '../types';
+import { SearchParams, SearchResults, Region, Store } from '../types';
 
 // Configure API URL based on environment
 const API_BASE_URL = process.env.NODE_ENV === 'production' 
@@ -14,6 +14,16 @@ const apiClient = axios.create({
     'Content-Type': 'application/json',
   }
 });
+
+// Add response interceptor for better error handling
+apiClient.interceptors.response.use(
+  response => response,
+  error => {
+    // Log the error but allow component to handle it
+    console.error('API Error:', error.response?.data || error.message);
+    return Promise.reject(error);
+  }
+);
 
 const api = {
   async search(params: SearchParams): Promise<SearchResults> {
@@ -46,7 +56,27 @@ const api = {
       return [
         { code: 'global', name: 'Global' },
         { code: 'us', name: 'United States' },
-        { code: 'eu', name: 'Europe' }
+        { code: 'eu', name: 'Europe' },
+        { code: 'uk', name: 'United Kingdom' },
+        { code: 'de', name: 'Germany' },
+        { code: 'gr', name: 'Greece' }
+      ];
+    }
+  },
+
+  async getStores(): Promise<Store[]> {
+    try {
+      const response = await apiClient.get<Store[]>('/api/stores');
+      return response.data;
+    } catch (error) {
+      console.error('API getStores error:', error);
+      // Return default stores to prevent UI crashes
+      return [
+        { code: 'amazon', name: 'Amazon', regions: ['global', 'us', 'uk', 'de'] },
+        { code: 'ebay', name: 'eBay', regions: ['global', 'us', 'uk'] },
+        { code: 'walmart', name: 'Walmart', regions: ['us'] },
+        { code: 'aliexpress', name: 'AliExpress', regions: ['global'] },
+        { code: 'bestbuy', name: 'Best Buy', regions: ['us'] }
       ];
     }
   }

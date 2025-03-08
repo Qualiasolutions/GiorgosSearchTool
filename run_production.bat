@@ -1,35 +1,35 @@
 @echo off
-echo Starting Giorgos Power Search in production mode...
+echo =============================================
+echo Running Giorgos Power Search (Production Mode)
+echo =============================================
 echo.
 
-REM Check if npx is available
-where npx >nul 2>nul
-if %ERRORLEVEL% NEQ 0 (
-    echo npx not found. Please install Node.js.
+REM Check if the frontend build exists
+if not exist frontend\build (
+    echo ERROR: Frontend build does not exist.
+    echo Please run production_build.bat first.
+    echo.
+    pause
     exit /b 1
 )
 
-REM Start the backend in one window
-start cmd /c "cd backend && run_production.bat"
-echo Backend starting on http://localhost:5000
+REM Check if backend virtual environment exists
+if not exist backend\venv (
+    echo ERROR: Backend environment not set up.
+    echo Please run production_build.bat first.
+    echo.
+    pause
+    exit /b 1
+)
 
-REM Wait for backend to start
-timeout /t 3 /nobreak >nul
-
-REM Start the frontend in another window
-start cmd /c "cd frontend && npx serve -s build -l 3000"
-echo Frontend starting on http://localhost:3000
+echo Starting Flask server with production build...
+echo.
+echo The application will be available at: http://localhost:5000
+echo.
+cd backend
+call venv\Scripts\activate
+python app.py
 
 echo.
-echo Giorgos Power Search is now running!
-echo Frontend: http://localhost:3000
-echo Backend API: http://localhost:5000
-echo.
-echo Press any key to stop all servers...
-pause >nul
-
-REM Kill the servers when done
-taskkill /f /im waitress* >nul 2>nul
-taskkill /f /im node* >nul 2>nul
-
-echo All servers stopped. 
+echo Server shut down.
+pause 
