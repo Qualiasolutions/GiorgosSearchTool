@@ -54,7 +54,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   };
   
   const handleLanguageChange = (e: SelectChangeEvent<string>) => {
-    setLanguage(e.target.value as 'en' | 'gr');
+    setLanguage(e.target.value as 'en' | 'el');
   };
   
   const handleCloseDrawer = () => {
@@ -167,7 +167,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             }}
           >
             <MenuItem value="en">English</MenuItem>
-            <MenuItem value="gr">Ελληνικά</MenuItem>
+            <MenuItem value="el">Ελληνικά</MenuItem>
           </Select>
         </Box>
         
@@ -211,7 +211,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             <Tooltip title={language === 'en' ? 'Change to Greek' : 'Αλλαγή στα Αγγλικά'}>
               <IconButton 
                 color="inherit"
-                onClick={() => setLanguage(language === 'en' ? 'gr' : 'en')}
+                onClick={() => setLanguage(language === 'en' ? 'el' : 'en')}
                 size="small"
               >
                 <TranslateIcon />
