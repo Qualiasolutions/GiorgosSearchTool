@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, make_response
 from .services.search_service import search_products
 import logging
 import traceback
@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 main = Blueprint('main', __name__)
 
-@main.route('/api/search', methods=['POST'])
+@main.route('/api/search', methods=['POST', 'OPTIONS'])
 def search():
     """
     API route for searching products across multiple e-commerce platforms.
@@ -26,6 +26,14 @@ def search():
     Returns:
         - JSON response with search results
     """
+    # Handle OPTIONS request for CORS preflight
+    if request.method == 'OPTIONS':
+        response = make_response()
+        response.headers.add('Access-Control-Allow-Origin', 'https://giorgospowersearch-web.onrender.com')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        return response
+        
     try:
         start_time = time.time()
         data = request.get_json()
@@ -43,12 +51,14 @@ def search():
         logger.info(f"Search request: {query} (region: {region}, sort: {sort})")
         
         if not query:
-            return jsonify({
+            response = jsonify({
                 'success': False,
                 'error': 'Query is required',
                 'products': [],
                 'total_results': 0
-            }), 400
+            })
+            response.headers.add('Access-Control-Allow-Origin', 'https://giorgospowersearch-web.onrender.com')
+            return response, 400
             
         # Execute search with error handling
         results = search_products(
@@ -63,17 +73,20 @@ def search():
         
         # Check if the search had an error
         if 'error' in results:
-            return jsonify({
+            response_data = {
                 'success': False,
                 'error': results['error'],
                 'products': results.get('products', []),
                 'total_results': results.get('total_results', 0),
                 'search_time': results.get('search_time', 0),
                 'query': results.get('query', query),
-            }), 200
+            }
+            response = jsonify(response_data)
+            response.headers.add('Access-Control-Allow-Origin', 'https://giorgospowersearch-web.onrender.com')
+            return response, 200
         
         # Create successful response
-        response = {
+        response_data = {
             'success': True,
             'products': results.get('products', []),
             'total_results': results.get('total_results', 0),
@@ -83,16 +96,20 @@ def search():
             'query': results.get('query', query)
         }
         
-        return jsonify(response), 200
+        response = jsonify(response_data)
+        response.headers.add('Access-Control-Allow-Origin', 'https://giorgospowersearch-web.onrender.com')
+        return response, 200
     except Exception as e:
         logger.error(f"Search API error: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({
+        response = jsonify({
             'success': False,
             'error': f"Search failed: {str(e)}",
             'products': [],
             'total_results': 0
-        }), 500
+        })
+        response.headers.add('Access-Control-Allow-Origin', 'https://giorgospowersearch-web.onrender.com')
+        return response, 500
 
 def apply_filters(products, filters):
     """Apply filters to product results"""
@@ -166,8 +183,16 @@ def get_regions():
         logger.error(f"Get regions error: {str(e)}")
         return jsonify({'error': f'Failed to get regions: {str(e)}'}), 500
 
-@main.route('/api/stores', methods=['GET'])
+@main.route('/api/stores', methods=['GET', 'OPTIONS'])
 def get_stores():
+    # Handle OPTIONS request for CORS preflight
+    if request.method == 'OPTIONS':
+        response = make_response()
+        response.headers.add('Access-Control-Allow-Origin', 'https://giorgospowersearch-web.onrender.com')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        return response
+        
     try:
         stores = [
             {'code': 'amazon', 'name': 'Amazon', 'regions': ['global', 'us', 'uk', 'de', 'fr', 'jp']},
@@ -186,12 +211,26 @@ def get_stores():
             {'code': 'skroutz', 'name': 'Skroutz', 'regions': ['gr']},
             {'code': 'kotsovolos', 'name': 'Kotsovolos', 'regions': ['gr']}
         ]
-        return jsonify(stores)
+        response = jsonify(stores)
+        response.headers.add('Access-Control-Allow-Origin', 'https://giorgospowersearch-web.onrender.com')
+        return response
     except Exception as e:
         logger.error(f"Get stores error: {str(e)}")
-        return jsonify({'error': f'Failed to get stores: {str(e)}'}), 500
+        response = jsonify({'error': f'Failed to get stores: {str(e)}'})
+        response.headers.add('Access-Control-Allow-Origin', 'https://giorgospowersearch-web.onrender.com')
+        return response, 500
 
-@main.route('/api/health', methods=['GET'])
+@main.route('/api/health', methods=['GET', 'OPTIONS'])
 def health_check():
     """Simple health check endpoint"""
-    return jsonify({'status': 'healthy', 'message': 'API is running'}), 200 
+    # Handle OPTIONS request for CORS preflight
+    if request.method == 'OPTIONS':
+        response = make_response()
+        response.headers.add('Access-Control-Allow-Origin', 'https://giorgospowersearch-web.onrender.com')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        return response
+        
+    response = jsonify({'status': 'healthy', 'message': 'API is running'})
+    response.headers.add('Access-Control-Allow-Origin', 'https://giorgospowersearch-web.onrender.com')
+    return response, 200 
