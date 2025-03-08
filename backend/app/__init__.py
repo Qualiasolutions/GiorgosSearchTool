@@ -8,12 +8,8 @@ load_dotenv()
 def create_app():
     app = Flask(__name__)
     
-    # Configure CORS to allow requests from the frontend domain
-    CORS(app, resources={r"/api/*": {"origins": [
-        "https://giorgospowersearch-web.onrender.com",
-        "http://localhost:3000",
-        "http://localhost:5000"
-    ]}})
+    # Configure CORS to allow all origins
+    CORS(app, resources={r"/api/*": {"origins": "*"}})
     
     from .routes import main
     app.register_blueprint(main)

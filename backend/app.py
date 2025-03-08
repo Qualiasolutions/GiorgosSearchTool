@@ -9,12 +9,8 @@ load_dotenv()
 
 app = create_app()
 
-# More specific CORS configuration to allow requests from the frontend domain
-CORS(app, resources={r"/api/*": {"origins": [
-    "https://giorgospowersearch-web.onrender.com",
-    "http://localhost:3000",
-    "http://localhost:5000"
-]}})
+# More permissive CORS configuration to allow requests from any domain
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 # Configure to serve the React build files in production
 @app.route('/', defaults={'path': ''})

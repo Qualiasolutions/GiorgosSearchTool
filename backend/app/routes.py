@@ -29,7 +29,7 @@ def search():
     # Handle OPTIONS request for CORS preflight
     if request.method == 'OPTIONS':
         response = make_response()
-        response.headers.add('Access-Control-Allow-Origin', 'https://giorgospowersearch-web.onrender.com')
+        response.headers.add('Access-Control-Allow-Origin', '*')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
         return response
@@ -57,7 +57,7 @@ def search():
                 'products': [],
                 'total_results': 0
             })
-            response.headers.add('Access-Control-Allow-Origin', 'https://giorgospowersearch-web.onrender.com')
+            response.headers.add('Access-Control-Allow-Origin', '*')
             return response, 400
             
         # Execute search with error handling
@@ -82,7 +82,7 @@ def search():
                 'query': results.get('query', query),
             }
             response = jsonify(response_data)
-            response.headers.add('Access-Control-Allow-Origin', 'https://giorgospowersearch-web.onrender.com')
+            response.headers.add('Access-Control-Allow-Origin', '*')
             return response, 200
         
         # Create successful response
@@ -97,7 +97,7 @@ def search():
         }
         
         response = jsonify(response_data)
-        response.headers.add('Access-Control-Allow-Origin', 'https://giorgospowersearch-web.onrender.com')
+        response.headers.add('Access-Control-Allow-Origin', '*')
         return response, 200
     except Exception as e:
         logger.error(f"Search API error: {str(e)}")
@@ -108,7 +108,7 @@ def search():
             'products': [],
             'total_results': 0
         })
-        response.headers.add('Access-Control-Allow-Origin', 'https://giorgospowersearch-web.onrender.com')
+        response.headers.add('Access-Control-Allow-Origin', '*')
         return response, 500
 
 def apply_filters(products, filters):
@@ -188,13 +188,13 @@ def get_stores():
     # Handle OPTIONS request for CORS preflight
     if request.method == 'OPTIONS':
         response = make_response()
-        response.headers.add('Access-Control-Allow-Origin', 'https://giorgospowersearch-web.onrender.com')
+        response.headers.add('Access-Control-Allow-Origin', '*')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
         return response
         
     try:
-        stores = [
+        stores_data = [
             {'code': 'amazon', 'name': 'Amazon', 'regions': ['global', 'us', 'uk', 'de', 'fr', 'jp']},
             {'code': 'ebay', 'name': 'eBay', 'regions': ['global', 'us', 'uk', 'de']},
             {'code': 'walmart', 'name': 'Walmart', 'regions': ['us']},
@@ -211,13 +211,14 @@ def get_stores():
             {'code': 'skroutz', 'name': 'Skroutz', 'regions': ['gr']},
             {'code': 'kotsovolos', 'name': 'Kotsovolos', 'regions': ['gr']}
         ]
-        response = jsonify(stores)
-        response.headers.add('Access-Control-Allow-Origin', 'https://giorgospowersearch-web.onrender.com')
+        stores = [store['code'] for store in stores_data]
+        response = jsonify({'stores': stores})
+        response.headers.add('Access-Control-Allow-Origin', '*')
         return response
     except Exception as e:
         logger.error(f"Get stores error: {str(e)}")
         response = jsonify({'error': f'Failed to get stores: {str(e)}'})
-        response.headers.add('Access-Control-Allow-Origin', 'https://giorgospowersearch-web.onrender.com')
+        response.headers.add('Access-Control-Allow-Origin', '*')
         return response, 500
 
 @main.route('/api/health', methods=['GET', 'OPTIONS'])
@@ -226,11 +227,11 @@ def health_check():
     # Handle OPTIONS request for CORS preflight
     if request.method == 'OPTIONS':
         response = make_response()
-        response.headers.add('Access-Control-Allow-Origin', 'https://giorgospowersearch-web.onrender.com')
+        response.headers.add('Access-Control-Allow-Origin', '*')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
         return response
         
     response = jsonify({'status': 'healthy', 'message': 'API is running'})
-    response.headers.add('Access-Control-Allow-Origin', 'https://giorgospowersearch-web.onrender.com')
+    response.headers.add('Access-Control-Allow-Origin', '*')
     return response, 200 

@@ -1,27 +1,15 @@
 import axios, { AxiosError } from 'axios';
 import { SearchParams, SearchResults, Region, Store, Product, SearchHistory } from '../types';
 
-// Determine API URL based on environment
-const getApiUrl = () => {
-  // In production, use the deployed API URL
-  if (process.env.NODE_ENV === 'production') {
-    // If deployed on render.com
-    if (window.location.hostname.includes('render.com')) {
-      return 'https://giorgospowersearch-api.onrender.com/api';
-    }
-    // For other production environments, use relative URL
-    return '/api';
-  }
-  // In development, use local API
-  return process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
-};
-
-// Base API URL
-const API_URL = getApiUrl();
+// Direct URL to the backend API
+const API_URL = 'https://giorgossearchtool.onrender.com/api';
 
 // Configure axios defaults
 axios.defaults.baseURL = API_URL;
 axios.defaults.timeout = 60000; // Increased timeout to 60 seconds
+
+// Add CORS headers to all requests
+axios.defaults.headers.common['Access-Control-Allow-Origin'] = '*';
 
 // Maximum number of retries for failed requests
 const MAX_RETRIES = 2;
@@ -106,7 +94,7 @@ const api = {
   async getStores(): Promise<string[]> {
     try {
       const response = await axios.get('/stores');
-      return response.data.stores;
+      return response.data.stores || response.data || ['amazon', 'ebay', 'walmart', 'aliexpress'];
     } catch (error) {
       console.error('Error fetching stores:', error);
       return ['amazon', 'ebay', 'walmart', 'aliexpress'];
