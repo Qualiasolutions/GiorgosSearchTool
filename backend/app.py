@@ -2,11 +2,13 @@ from app import create_app
 import os
 from dotenv import load_dotenv
 from flask import send_from_directory, abort
+from flask_cors import CORS
 
 # Load environment variables
 load_dotenv()
 
 app = create_app()
+CORS(app, resources={r"/api/*": {"origins": "*"}})  # Enable CORS for API routes
 
 # Configure to serve the React build files in production
 @app.route('/', defaults={'path': ''})

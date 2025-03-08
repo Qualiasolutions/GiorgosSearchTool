@@ -18,6 +18,8 @@ import {
   Pagination,
   SelectChangeEvent,
   Alert,
+  AlertTitle,
+  Collapse,
   useTheme,
   IconButton,
   Switch,
@@ -34,7 +36,9 @@ import {
   ListItem,
   ListItemText,
   Checkbox,
-  Paper
+  Paper,
+  CardActionArea,
+  InputAdornment
 } from '@mui/material';
 import { 
   Search as SearchIcon, 
@@ -47,10 +51,12 @@ import {
   Info as InfoIcon,
   Settings as SettingsIcon,
   Speed as SpeedIcon,
-  Close as CloseIcon
+  Close as CloseIcon,
+  Clear as ClearIcon,
+  ImageNotSupported as ImageNotSupportedIcon
 } from '@mui/icons-material';
 import { Product, SearchParams, SearchFilters, SearchResults, SearchHistory, Region, Store, Facets } from '../types';
-import api from '../utils/api';
+import api, { SearchResponse } from '../utils/api';
 import { LanguageContext } from '../App';
 import { getTranslation } from '../utils/translations';
 import ProductCard from '../components/product/ProductCard';
@@ -92,17 +98,29 @@ const SearchPage: React.FC<SearchPageProps> = ({
   const [drawerOpen, setDrawerOpen] = useState<boolean>(false);
   const [activeFilters, setActiveFilters] = useState<number>(0);
   const [advancedModeOpen, setAdvancedModeOpen] = useState<boolean>(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   
   // Load regions and stores on component mount
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [regionsData, storesData] = await Promise.all([
-          api.getRegions(),
-          api.getStores()
-        ]);
-        setRegions(regionsData);
-        setStores(storesData);
+        // Use hardcoded regions instead of api.getRegions
+        const defaultRegions = [
+          { code: 'global', name: 'Global' },
+          { code: 'us', name: 'United States' },
+          { code: 'eu', name: 'Europe' },
+          { code: 'uk', name: 'United Kingdom' },
+          { code: 'de', name: 'Germany' },
+          { code: 'gr', name: 'Greece' }
+        ];
+        
+        const storesData = await api.getStores();
+        setRegions(defaultRegions);
+        setStores(storesData.map(code => ({ 
+          code, 
+          name: code.charAt(0).toUpperCase() + code.slice(1),
+          regions: ['global']
+        })));
       } catch (error) {
         console.error('Error loading initial data:', error);
       }
@@ -119,6 +137,7 @@ const SearchPage: React.FC<SearchPageProps> = ({
     
     setLoading(true);
     setError(null);
+    setSearchError(null);
     
     try {
       // Apply price range
@@ -128,16 +147,18 @@ const SearchPage: React.FC<SearchPageProps> = ({
         max_price: priceRange[1] < 2000 ? priceRange[1] : undefined
       };
       
-      // Add a timeout for the request
-      const timeoutPromise = new Promise<null>((_, reject) => 
-        setTimeout(() => reject(new Error('Search request timed out')), 30000)
-      );
+      // Perform the search
+      const response = await api.search(params);
       
-      // Race between actual request and timeout
-      const response = await Promise.race([
-        api.search(params),
-        timeoutPromise
-      ]) as SearchResults;
+      // Check for explicit error from backend
+      if (!response.success && response.error) {
+        setSearchError(response.error);
+        setResults({
+          ...response,
+          products: []
+        });
+        return;
+      }
       
       // Validate response
       if (!response || !response.products) {
@@ -150,23 +171,21 @@ const SearchPage: React.FC<SearchPageProps> = ({
       countActiveFilters(params.filters);
       
       // Add to search history if successful
-      addToSearchHistory({
-        ...params,
-        timestamp: new Date().toISOString(),
-        results_count: response.total_results
-      });
+      addToSearchHistory(api.createSearchHistoryItem(searchParams.query, response));
+    } catch (error) {
+      console.error('Search failed:', error);
+      setSearchError('Search request failed. Please try again later.');
       
-    } catch (err) {
-      console.error('Search error:', err);
-      setError('Failed to fetch search results. Please try again. ' + (err instanceof Error ? err.message : ''));
-      // Set empty results to avoid white screen
+      // Set empty results
       setResults({
         query: searchParams.query,
+        processed_query: searchParams.query,
+        products: [],
         total_results: 0,
-        page: searchParams.page || 1,
-        limit: searchParams.limit || 20,
+        page: 1,
+        limit: 20,
         best_deals: [],
-        products: []
+        success: false
       });
     } finally {
       setLoading(false);
@@ -535,26 +554,174 @@ const SearchPage: React.FC<SearchPageProps> = ({
     </Card>
   );
   
+  // Add styling for the search box
+  const searchBoxSx = {
+    display: 'flex',
+    flexDirection: { xs: 'column', sm: 'row' },
+    alignItems: { xs: 'stretch', sm: 'center' },
+    gap: 2,
+    p: { xs: 2, md: 3 },
+    borderRadius: 3,
+    boxShadow: '0 4px 20px rgba(0,0,0,0.06)',
+    background: 'linear-gradient(to right, rgba(0,164,172,0.04), rgba(0,164,172,0.08))',
+    backdropFilter: 'blur(10px)',
+    border: '1px solid rgba(0,164,172,0.1)',
+    mb: 3
+  };
+
+  // Add styling for the search input
+  const searchInputSx = {
+    flex: 1,
+    '& .MuiInputBase-root': {
+      bgcolor: 'white',
+      borderRadius: 2,
+      boxShadow: '0 2px 6px rgba(0,0,0,0.05)',
+      transition: 'all 0.3s ease',
+      '&:hover': {
+        boxShadow: '0 4px 10px rgba(0,164,172,0.15)',
+      },
+      '&.Mui-focused': {
+        boxShadow: '0 4px 10px rgba(0,164,172,0.25)',
+      }
+    }
+  };
+
+  // Add animation keyframes for product cards
+  const cardAnimationKeyframes = `
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  `;
+
+  // Update the product card style
+  const productCardSx = (index: number) => ({
+    height: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    position: 'relative',
+    animation: 'fadeIn 0.5s ease forwards',
+    animationDelay: `${index * 0.05}s`,
+    opacity: 0,
+    transform: 'translateY(10px)',
+    transition: 'transform 0.3s ease, box-shadow 0.3s ease',
+    '&:hover': {
+      transform: 'translateY(-5px)',
+      boxShadow: '0 8px 24px rgba(0,164,172,0.15)',
+      '& .MuiCardMedia-root': {
+        transform: 'scale(1.03)',
+      }
+    }
+  });
+
+  // Add responsiveness to the product grid
+  const productGridSx = {
+    mt: 3,
+    '& .MuiGrid-item': {
+      width: '100%',
+      display: 'flex'
+    }
+  };
+
+  // Add style for price slider
+  const priceSliderSx = {
+    '& .MuiSlider-thumb': {
+      width: 20,
+      height: 20,
+      '&:hover, &.Mui-focusVisible': {
+        boxShadow: '0 0 0 8px rgba(0,164,172,0.16)',
+      }
+    },
+    '& .MuiSlider-track': {
+      height: 6,
+      borderRadius: 3
+    },
+    '& .MuiSlider-rail': {
+      height: 6,
+      borderRadius: 3,
+      opacity: 0.3
+    }
+  };
+
   return (
     <Box>
       <Card sx={{ mb: 4, p: 3, boxShadow: 'rgba(0, 0, 0, 0.05) 0px 6px 24px 0px, rgba(0, 0, 0, 0.08) 0px 0px 0px 1px' }}>
         <Grid container spacing={3}>
           <Grid item xs={12} md={6}>
-            <TextField
-              fullWidth
-              label={getTranslation('searchPlaceholder', language)}
-              variant="outlined"
-              value={searchParams.query}
-              onChange={handleQueryChange}
-              InputProps={{
-                endAdornment: loading ? <CircularProgress size={24} /> : null
-              }}
-              onKeyPress={(e) => {
-                if (e.key === 'Enter') {
-                  handleSearch();
-                }
-              }}
-            />
+            <Box sx={searchBoxSx}>
+              <TextField
+                value={searchParams.query}
+                onChange={handleQueryChange}
+                placeholder={getTranslation('searchPlaceholder', language)}
+                fullWidth
+                variant="outlined"
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon color="primary" />
+                    </InputAdornment>
+                  ),
+                  endAdornment: searchParams.query ? (
+                    <InputAdornment position="end">
+                      <IconButton 
+                        size="small" 
+                        onClick={() => handleQueryChange({ target: { value: '' } } as any)}
+                      >
+                        <ClearIcon fontSize="small" />
+                      </IconButton>
+                    </InputAdornment>
+                  ) : null
+                }}
+                sx={searchInputSx}
+                onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+              />
+              
+              <Box sx={{ 
+                display: 'flex', 
+                flexDirection: { xs: 'column', sm: 'row' }, 
+                gap: 1,
+                width: { xs: '100%', sm: 'auto' } 
+              }}>
+                <FormControl 
+                  variant="outlined" 
+                  size="small" 
+                  sx={{ 
+                    minWidth: { xs: '100%', sm: 120 },
+                    bgcolor: 'white',
+                    borderRadius: 1,
+                  }}
+                >
+                  <Select
+                    value={searchParams.region}
+                    onChange={handleRegionChange}
+                    displayEmpty
+                    sx={{ '& .MuiSelect-select': { py: 1.5 } }}
+                  >
+                    {regions.map((region) => (
+                      <MenuItem key={region.code} value={region.code}>
+                        {region.name}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                
+                <Button
+                  variant="contained"
+                  color="primary"
+                  onClick={handleSearch}
+                  startIcon={<SearchIcon />}
+                  disabled={loading || !searchParams.query.trim()}
+                  sx={{ 
+                    height: { sm: '100%' },
+                    px: 3,
+                    py: { xs: 1.5, sm: 1 },
+                    width: { xs: '100%', sm: 'auto' }
+                  }}
+                >
+                  {getTranslation('search', language)}
+                </Button>
+              </Box>
+            </Box>
           </Grid>
           
           <Grid item xs={12} md={3}>
@@ -599,14 +766,16 @@ const SearchPage: React.FC<SearchPageProps> = ({
               valueLabelDisplay="auto"
               min={0}
               max={2000}
-              step={10}
-              sx={{
-                color: theme.palette.primary.main,
-                '& .MuiSlider-thumb': {
-                  height: 24,
-                  width: 24,
-                }
-              }}
+              step={50}
+              marks={[
+                { value: 0, label: '$0' },
+                { value: 500, label: '$500' },
+                { value: 1000, label: '$1000' },
+                { value: 1500, label: '$1500' },
+                { value: 2000, label: '$2000+' }
+              ]}
+              sx={priceSliderSx}
+              valueLabelFormat={(value) => `$${value}`}
             />
             <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
               <Typography variant="body2">${priceRange[0]}</Typography>
@@ -765,27 +934,147 @@ const SearchPage: React.FC<SearchPageProps> = ({
           )}
           
           {/* Main results */}
-          <Grid container spacing={3}>
-            {/* Products grid */}
-            <Grid item xs={12}>
-              {results.products.length === 0 ? (
-                <Alert severity="info" sx={{ mt: 2 }}>
-                  No products found matching your criteria. Try adjusting your filters or search terms.
-                </Alert>
-              ) : (
-                <Grid container spacing={2}>
-                  {results.products.map(product => (
-                    <Grid item key={product.id} xs={12} sm={6} md={4} lg={3}>
-                      <ProductCard 
-                        product={product} 
-                        isFavorite={isFavorite(product)}
-                        onFavoriteToggle={() => handleFavoriteToggle(product)}
+          <Grid container spacing={3} sx={productGridSx}>
+            {results?.products.map((product, index) => (
+              <Grid item xs={12} sm={6} md={4} lg={3} key={product.id}>
+                <Card sx={productCardSx(index)}>
+                  <CardActionArea component="a" href={product.url} target="_blank" rel="noopener noreferrer">
+                    <Box sx={{ 
+                      height: 200, 
+                      position: 'relative',
+                      overflow: 'hidden',
+                      bgcolor: 'rgba(0,0,0,0.04)'
+                    }}>
+                      {product.image ? (
+                        <CardMedia
+                          component="img"
+                          height="200"
+                          image={product.image}
+                          alt={product.title}
+                          sx={{ 
+                            objectFit: 'contain',
+                            p: 2,
+                            transition: 'transform 0.3s ease',
+                          }}
+                        />
+                      ) : (
+                        <Box sx={{ 
+                          height: '100%', 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          justifyContent: 'center',
+                          color: 'text.secondary'
+                        }}>
+                          <ImageNotSupportedIcon />
+                        </Box>
+                      )}
+                      
+                      {/* Site badge */}
+                      <Chip
+                        label={product.site}
+                        size="small"
+                        sx={{ 
+                          position: 'absolute', 
+                          bottom: 8, 
+                          right: 8,
+                          bgcolor: 'rgba(255,255,255,0.85)',
+                          fontWeight: 500,
+                          backdropFilter: 'blur(4px)',
+                          fontSize: '0.75rem'
+                        }}
                       />
-                    </Grid>
-                  ))}
-                </Grid>
-              )}
-            </Grid>
+                    </Box>
+                  </CardActionArea>
+                  
+                  <CardContent sx={{ flexGrow: 1, pb: 1 }}>
+                    <Tooltip title={product.title}>
+                      <Typography 
+                        variant="subtitle1" 
+                        gutterBottom 
+                        sx={{ 
+                          fontWeight: 600,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                          minHeight: 48
+                        }}
+                      >
+                        {product.title}
+                      </Typography>
+                    </Tooltip>
+                    
+                    <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                      {product.rating ? (
+                        <>
+                          <Rating 
+                            value={product.rating} 
+                            precision={0.5} 
+                            size="small" 
+                            readOnly 
+                          />
+                          <Typography variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>
+                            ({product.review_count || 0})
+                          </Typography>
+                        </>
+                      ) : (
+                        <Typography variant="caption" color="text.secondary">
+                          No ratings
+                        </Typography>
+                      )}
+                    </Box>
+                    
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                      <Box>
+                        {product.original_price && product.original_price > product.price ? (
+                          <>
+                            <Typography 
+                              variant="caption" 
+                              color="text.secondary" 
+                              sx={{ 
+                                textDecoration: 'line-through', 
+                                display: 'block' 
+                              }}
+                            >
+                              {product.currency}{product.original_price.toFixed(2)}
+                            </Typography>
+                            <Typography 
+                              variant="body1" 
+                              color="error.main" 
+                              sx={{ fontWeight: 700 }}
+                            >
+                              {product.currency}{product.price.toFixed(2)}
+                            </Typography>
+                          </>
+                        ) : (
+                          <Typography variant="body1" sx={{ fontWeight: 700 }}>
+                            {product.price ? `${product.currency}${product.price.toFixed(2)}` : 'N/A'}
+                          </Typography>
+                        )}
+                      </Box>
+                      
+                      <IconButton 
+                        color={isFavorite(product) ? "primary" : "default"}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleFavoriteToggle(product);
+                        }}
+                        size="small"
+                        sx={{ 
+                          borderRadius: 1.5,
+                          bgcolor: isFavorite(product) ? 'rgba(0,164,172,0.1)' : 'transparent'
+                        }}
+                        aria-label={isFavorite(product) ? "Remove from favorites" : "Add to favorites"}
+                      >
+                        {isFavorite(product) ? <FavoriteIcon /> : <FavoriteBorderIcon />}
+                      </IconButton>
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grid>
+            ))}
           </Grid>
           
           {/* Pagination */}
@@ -834,6 +1123,54 @@ const SearchPage: React.FC<SearchPageProps> = ({
         
         {renderFacetFilters()}
       </Drawer>
+      
+      {searchError && (
+        <Collapse in={!!searchError}>
+          <Alert 
+            severity="error" 
+            sx={{ mt: 2, mb: 2 }}
+            onClose={() => setSearchError(null)}
+          >
+            <AlertTitle>Search Error</AlertTitle>
+            {searchError}
+          </Alert>
+        </Collapse>
+      )}
+      
+      {results?.products.length === 0 && !loading && (
+        <Box 
+          sx={{ 
+            display: 'flex', 
+            flexDirection: 'column',
+            alignItems: 'center', 
+            justifyContent: 'center',
+            p: 3, 
+            my: 2,
+            backgroundColor: 'background.paper',
+            borderRadius: 2,
+            boxShadow: 1
+          }}
+        >
+          <InfoIcon color="info" sx={{ fontSize: 40, mb: 2 }} />
+          {searchError ? (
+            <Typography variant="body1" color="error">
+              {searchError}
+            </Typography>
+          ) : (
+            <>
+              <Typography variant="h6">
+                No products found matching your criteria
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Try adjusting your search terms or filters
+              </Typography>
+            </>
+          )}
+        </Box>
+      )}
+      
+      {/* Add this below the search components */}
+      <style>{cardAnimationKeyframes}</style>
     </Box>
   );
 };

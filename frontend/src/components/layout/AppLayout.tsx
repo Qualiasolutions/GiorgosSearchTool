@@ -1,206 +1,287 @@
-import React, { useState, ReactNode, useContext } from 'react';
-import { 
-  AppBar, 
-  Box, 
-  Toolbar, 
-  Typography, 
-  IconButton, 
-  Drawer, 
-  List, 
-  ListItem, 
-  ListItemIcon, 
-  ListItemText, 
-  Container, 
-  useTheme,
+import React, { useState, useContext } from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import {
+  AppBar,
+  Box,
+  Drawer,
+  IconButton,
+  List,
+  ListItem,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
+  Toolbar,
+  Typography,
   useMediaQuery,
+  useTheme,
   Divider,
-  ToggleButton,
-  ToggleButtonGroup,
-  Avatar,
-  Paper
+  Select,
+  MenuItem,
+  SelectChangeEvent,
+  Tooltip
 } from '@mui/material';
-import { 
-  Menu as MenuIcon, 
-  Search as SearchIcon, 
-  Favorite as FavoriteIcon, 
+import {
+  Search as SearchIcon,
+  Favorite as FavoriteIcon,
   History as HistoryIcon,
-  Brightness4 as DarkModeIcon, 
-  Brightness7 as LightModeIcon,
-  Translate as TranslateIcon
+  Menu as MenuIcon,
+  Settings as SettingsIcon,
+  Translate as TranslateIcon,
+  DarkMode as DarkModeIcon,
+  LightMode as LightModeIcon,
+  VerifiedUser as LogoIcon,
+  Close as CloseIcon
 } from '@mui/icons-material';
-import { useNavigate, useLocation } from 'react-router-dom';
 import { LanguageContext } from '../../App';
 import { getTranslation } from '../../utils/translations';
 
+// Drawer width for desktop
+const DRAWER_WIDTH = 240;
+
 interface AppLayoutProps {
-  children: ReactNode;
+  children: React.ReactNode;
 }
 
 const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const navigate = useNavigate();
+  const { language, setLanguage } = useContext(LanguageContext);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-  const { language, setLanguage } = useContext(LanguageContext);
-
-  const menuItems = [
-    { text: getTranslation('search', language), icon: <SearchIcon />, path: '/' },
-    { text: getTranslation('favorites', language), icon: <FavoriteIcon />, path: '/favorites' },
-    { text: getTranslation('history', language), icon: <HistoryIcon />, path: '/history' },
-  ];
-
-  const toggleDrawer = () => {
-    setDrawerOpen(!drawerOpen);
+  
+  const handleDrawerToggle = () => {
+    setMobileOpen(!mobileOpen);
   };
-
-  const handleNavigation = (path: string) => {
-    navigate(path);
+  
+  const handleLanguageChange = (e: SelectChangeEvent<string>) => {
+    setLanguage(e.target.value as 'en' | 'gr');
+  };
+  
+  const handleCloseDrawer = () => {
     if (isMobile) {
-      setDrawerOpen(false);
+      setMobileOpen(false);
     }
   };
 
-  const handleLanguageChange = (_event: React.MouseEvent<HTMLElement>, newLanguage: string | null) => {
-    if (newLanguage) {
-      setLanguage(newLanguage as 'en' | 'el');
-    }
-  };
-
-  const getPageTitle = (): string => {
-    switch (location.pathname) {
+  // Getting current page title
+  const getPageTitle = () => {
+    switch(location.pathname) {
       case '/favorites':
         return getTranslation('favorites', language);
       case '/history':
         return getTranslation('history', language);
       default:
-        return getTranslation('welcome', language);
+        return getTranslation('search', language);
     }
   };
+  
+  const drawer = (
+    <Box sx={{ 
+      display: 'flex', 
+      flexDirection: 'column', 
+      height: '100%',
+      bgcolor: theme.palette.primary.main,
+      color: 'white'
+    }}>
+      <Box sx={{ 
+        p: 2, 
+        display: 'flex', 
+        alignItems: 'center',
+        justifyContent: 'space-between',
+      }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <LogoIcon sx={{ fontSize: 28 }} />
+          <Typography variant="h6" fontWeight="bold">
+            Giorgos Search
+          </Typography>
+        </Box>
+        {isMobile && (
+          <IconButton 
+            onClick={handleDrawerToggle} 
+            sx={{ color: 'white' }}
+            edge="end"
+          >
+            <CloseIcon />
+          </IconButton>
+        )}
+      </Box>
+      
+      <Divider sx={{ borderColor: 'rgba(255,255,255,0.1)' }} />
+      
+      <List sx={{ flexGrow: 1, pt: 2 }}>
+        {[
+          { text: getTranslation('search', language), icon: <SearchIcon />, path: '/' },
+          { text: getTranslation('favorites', language), icon: <FavoriteIcon />, path: '/favorites' },
+          { text: getTranslation('history', language), icon: <HistoryIcon />, path: '/history' },
+        ].map((item) => {
+          const isActive = location.pathname === item.path;
+          return (
+            <ListItem key={item.text} disablePadding>
+              <ListItemButton 
+                component={Link} 
+                to={item.path}
+                selected={isActive}
+                onClick={handleCloseDrawer}
+                sx={{
+                  py: 1.5,
+                  borderRadius: '0 24px 24px 0',
+                  ml: 1,
+                  mr: 2,
+                  mb: 1,
+                  '&.Mui-selected': {
+                    bgcolor: 'rgba(255,255,255,0.15)',
+                    '&:hover': {
+                      bgcolor: 'rgba(255,255,255,0.25)',
+                    },
+                  },
+                  '&:hover': {
+                    bgcolor: 'rgba(255,255,255,0.1)',
+                  },
+                }}
+              >
+                <ListItemIcon sx={{ color: 'white', minWidth: 45 }}>
+                  {item.icon}
+                </ListItemIcon>
+                <ListItemText primary={item.text} />
+              </ListItemButton>
+            </ListItem>
+          );
+        })}
+      </List>
+      
+      <Box sx={{ p: 2 }}>
+        <Divider sx={{ mb: 2, borderColor: 'rgba(255,255,255,0.1)' }} />
+        <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+          <TranslateIcon sx={{ mr: 1, opacity: 0.7 }} />
+          <Select
+            value={language}
+            onChange={handleLanguageChange}
+            variant="standard"
+            size="small"
+            sx={{ 
+              color: 'white',
+              '& .MuiSelect-select': { py: 0 },
+              '& .MuiInput-underline:before': { borderColor: 'rgba(255,255,255,0.3)' },
+              '& .MuiInput-underline:hover:not(.Mui-disabled):before': { borderColor: 'rgba(255,255,255,0.5)' },
+              '& .MuiSvgIcon-root': { color: 'white' }
+            }}
+          >
+            <MenuItem value="en">English</MenuItem>
+            <MenuItem value="gr">Ελληνικά</MenuItem>
+          </Select>
+        </Box>
+        
+        <Box sx={{ mt: 2 }}>
+          <Typography variant="caption" sx={{ opacity: 0.6 }}>
+            &copy; 2025 Qualia Solutions
+          </Typography>
+        </Box>
+      </Box>
+    </Box>
+  );
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
-      <AppBar position="fixed" sx={{ zIndex: (theme) => theme.zIndex.drawer + 1 }}>
-        <Toolbar>
-          <IconButton
-            color="inherit"
-            aria-label="open drawer"
-            edge="start"
-            onClick={toggleDrawer}
-            sx={{ mr: 2, display: { md: 'none' } }}
-          >
-            <MenuIcon />
-          </IconButton>
-          <Avatar 
-            src="/logo.png" 
-            alt="Logo"
-            sx={{ width: 40, height: 40, mr: 2 }}
-          >
-            G
-          </Avatar>
-          <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1, fontWeight: 'bold' }}>
-            {getPageTitle()}
-          </Typography>
-          <ToggleButtonGroup
-            value={language}
-            exclusive
-            onChange={handleLanguageChange}
-            aria-label="language selector"
-            size="small"
-            sx={{ 
-              bgcolor: 'rgba(255,255,255,0.15)', 
-              borderRadius: 1,
-              '& .MuiToggleButton-root': {
-                color: 'white',
-                border: 'none',
-                '&.Mui-selected': {
-                  bgcolor: 'rgba(255,255,255,0.25)',
-                  color: 'white',
-                }
+      {/* App bar - shown only on mobile */}
+      {isMobile && (
+        <AppBar 
+          position="fixed" 
+          sx={{ 
+            width: '100%',
+            zIndex: theme.zIndex.drawer + 1,
+            bgcolor: theme.palette.primary.main,
+            boxShadow: 3
+          }}
+        >
+          <Toolbar>
+            <IconButton
+              color="inherit"
+              aria-label="open drawer"
+              edge="start"
+              onClick={handleDrawerToggle}
+              sx={{ mr: 2 }}
+            >
+              <MenuIcon />
+            </IconButton>
+            <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1 }}>
+              {getPageTitle()}
+            </Typography>
+            
+            {/* Language selector for mobile */}
+            <Tooltip title={language === 'en' ? 'Change to Greek' : 'Αλλαγή στα Αγγλικά'}>
+              <IconButton 
+                color="inherit"
+                onClick={() => setLanguage(language === 'en' ? 'gr' : 'en')}
+                size="small"
+              >
+                <TranslateIcon />
+              </IconButton>
+            </Tooltip>
+          </Toolbar>
+        </AppBar>
+      )}
+
+      {/* Sidebar - persistent on desktop, temporary on mobile */}
+      <Box
+        component="nav"
+        sx={{ 
+          width: { md: DRAWER_WIDTH }, 
+          flexShrink: { md: 0 } 
+        }}
+      >
+        {/* Mobile drawer */}
+        {isMobile ? (
+          <Drawer
+            variant="temporary"
+            open={mobileOpen}
+            onClose={handleDrawerToggle}
+            ModalProps={{
+              keepMounted: true, // Better mobile performance
+            }}
+            PaperProps={{
+              sx: {
+                boxSizing: 'border-box',
+                width: DRAWER_WIDTH,
+                borderRadius: 0, // Override theme for mobile
               }
             }}
           >
-            <ToggleButton value="en" aria-label="English">
-              EN
-            </ToggleButton>
-            <ToggleButton value="el" aria-label="Greek">
-              EL
-            </ToggleButton>
-          </ToggleButtonGroup>
-        </Toolbar>
-      </AppBar>
-      
-      <Drawer
-        variant={isMobile ? 'temporary' : 'permanent'}
-        open={drawerOpen}
-        onClose={toggleDrawer}
+            {drawer}
+          </Drawer>
+        ) : (
+          // Desktop drawer
+          <Drawer
+            variant="permanent"
+            sx={{
+              display: { xs: 'none', md: 'block' },
+              '& .MuiDrawer-paper': { 
+                boxSizing: 'border-box', 
+                width: DRAWER_WIDTH,
+                borderRight: 'none',
+              },
+            }}
+            open
+          >
+            {drawer}
+          </Drawer>
+        )}
+      </Box>
+
+      {/* Main content */}
+      <Box
+        component="main"
         sx={{
-          width: 240,
-          flexShrink: 0,
-          '& .MuiDrawer-paper': {
-            width: 240,
-            boxSizing: 'border-box',
-          },
+          flexGrow: 1,
+          width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
+          height: '100vh',
+          overflow: 'auto',
+          bgcolor: theme.palette.background.default,
+          pt: { xs: 8, md: 3 },
+          pb: 4,
+          px: { xs: 2, sm: 3, md: 4 }
         }}
       >
-        <Toolbar />
-        <Box sx={{ overflow: 'auto', height: '100%', p: 2 }}>
-          <Paper 
-            elevation={0}
-            sx={{ 
-              p: 2, 
-              mb: 2, 
-              borderRadius: 2, 
-              bgcolor: theme.palette.primary.main,
-              color: 'white'
-            }}
-          >
-            <Typography variant="subtitle1" fontWeight="bold">
-              {language === 'el' ? 'Γιώργος' : 'Giorgos'}
-            </Typography>
-            <Typography variant="body2">
-              {language === 'el' ? 'Καλώς ήρθες!' : 'Welcome!'}
-            </Typography>
-          </Paper>
-          <List>
-            {menuItems.map((item) => (
-              <ListItem 
-                button 
-                key={item.text} 
-                onClick={() => handleNavigation(item.path)}
-                selected={location.pathname === item.path}
-                sx={{ 
-                  borderRadius: 2, 
-                  mb: 1,
-                  '&.Mui-selected': {
-                    bgcolor: `${theme.palette.primary.main}15`,
-                    color: theme.palette.primary.main,
-                    '& .MuiListItemIcon-root': {
-                      color: theme.palette.primary.main
-                    }
-                  }
-                }}
-              >
-                <ListItemIcon>{item.icon}</ListItemIcon>
-                <ListItemText primary={item.text} />
-              </ListItem>
-            ))}
-          </List>
-          <Divider sx={{ my: 2 }} />
-          <Box sx={{ display: 'flex', alignItems: 'center', px: 2 }}>
-            <TranslateIcon fontSize="small" sx={{ mr: 1, color: 'text.secondary' }} />
-            <Typography variant="body2" color="text.secondary">
-              {language === 'el' ? 'Ελληνικά' : 'English'}
-            </Typography>
-          </Box>
-        </Box>
-      </Drawer>
-      
-      <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
-        <Toolbar />
-        <Container maxWidth="lg" sx={{ pt: 2 }}>
-          {children}
-        </Container>
+        {children}
       </Box>
     </Box>
   );

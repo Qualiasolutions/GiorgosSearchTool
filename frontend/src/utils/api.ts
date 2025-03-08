@@ -1,83 +1,128 @@
-import axios from 'axios';
-import { SearchParams, SearchResults, Region, Store } from '../types';
+import axios, { AxiosError } from 'axios';
+import { SearchParams, SearchResults, Region, Store, Product, SearchHistory } from '../types';
 
-// Configure API URL based on environment
-const API_BASE_URL = process.env.NODE_ENV === 'production' 
-  ? 'http://localhost:5000' // Change this to your production API URL if different
-  : '';
-
-// Create axios instance with better timeout and error handling
-const apiClient = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: 30000, // Increase timeout to 30 seconds for production
-  headers: {
-    'Content-Type': 'application/json',
+// Determine API URL based on environment
+const getApiUrl = () => {
+  // In production, use the deployed API URL
+  if (process.env.NODE_ENV === 'production') {
+    // If deployed on render.com
+    if (window.location.hostname.includes('render.com')) {
+      return 'https://giorgospowersearch-api.onrender.com/api';
+    }
+    // For other production environments, use relative URL
+    return '/api';
   }
-});
+  // In development, use local API
+  return process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+};
 
-// Add response interceptor for better error handling
-apiClient.interceptors.response.use(
-  response => response,
-  error => {
-    // Log the error but allow component to handle it
-    console.error('API Error:', error.response?.data || error.message);
-    return Promise.reject(error);
+// Base API URL
+const API_URL = getApiUrl();
+
+// Configure axios defaults
+axios.defaults.baseURL = API_URL;
+axios.defaults.timeout = 60000; // Increased timeout to 60 seconds
+
+// Maximum number of retries for failed requests
+const MAX_RETRIES = 2;
+
+/**
+ * Enhanced interface for search response with success and error fields
+ */
+export interface SearchResponse extends SearchResults {
+  success: boolean;
+  error?: string;
+  search_time?: number;
+}
+
+/**
+ * Retry mechanism for API requests
+ */
+const retryRequest = async <T>(
+  requestFn: () => Promise<T>, 
+  maxRetries: number = MAX_RETRIES
+): Promise<T> => {
+  let lastError: any;
+  
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await requestFn();
+    } catch (error) {
+      lastError = error;
+      console.warn(`Request failed (attempt ${attempt + 1}/${maxRetries + 1}):`, error);
+      
+      // Only retry certain types of errors (network issues, timeouts, 5xx errors)
+      const shouldRetry = (error instanceof AxiosError) && 
+        (error.code === 'ECONNABORTED' || 
+         error.code === 'ETIMEDOUT' || 
+         !error.response || 
+         error.response.status >= 500);
+      
+      if (!shouldRetry || attempt === maxRetries) {
+        break;
+      }
+      
+      // Exponential backoff with a small initial delay
+      const delay = Math.min(1000 * (2 ** attempt), 5000);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
-);
+  
+  throw lastError;
+};
 
 const api = {
-  async search(params: SearchParams): Promise<SearchResults> {
-    try {
-      console.log('Sending search request to API:', `${API_BASE_URL}/api/search`, params);
-      const response = await apiClient.post<SearchResults>('/api/search', params);
-      console.log('Received API response:', response.data);
+  /**
+   * Searches for products across multiple e-commerce platforms
+   */
+  async search(params: SearchParams): Promise<SearchResponse> {
+    return retryRequest(async () => {
+      const response = await axios.post<SearchResponse>('/search', params);
       return response.data;
+    });
+  },
+
+  /**
+   * Creates a SearchHistory object from search results
+   */
+  createSearchHistoryItem(
+    query: string, 
+    results: SearchResponse
+  ): SearchHistory {
+    return {
+      query,
+      timestamp: new Date().toISOString(),
+      results_count: results.total_results,
+      region: 'global',
+      sort_by: 'relevance',
+      page: results.page,
+      limit: results.limit
+    };
+  },
+
+  /**
+   * Gets a list of available e-commerce stores
+   */
+  async getStores(): Promise<string[]> {
+    try {
+      const response = await axios.get('/stores');
+      return response.data.stores;
     } catch (error) {
-      console.error('API search error:', error);
-      // Return fallback data to prevent UI crashes
-      return {
-        query: params.query,
-        total_results: 0,
-        page: params.page || 1,
-        limit: params.limit || 20,
-        best_deals: [],
-        products: []
-      };
+      console.error('Error fetching stores:', error);
+      return ['amazon', 'ebay', 'walmart', 'aliexpress'];
     }
   },
 
-  async getRegions(): Promise<Region[]> {
+  /**
+   * Performs a health check on the backend API
+   */
+  async checkApiHealth(): Promise<boolean> {
     try {
-      const response = await apiClient.get<Region[]>('/api/regions');
-      return response.data;
+      const response = await axios.get('/health');
+      return response.data.status === 'healthy';
     } catch (error) {
-      console.error('API getRegions error:', error);
-      // Return default regions to prevent UI crashes
-      return [
-        { code: 'global', name: 'Global' },
-        { code: 'us', name: 'United States' },
-        { code: 'eu', name: 'Europe' },
-        { code: 'uk', name: 'United Kingdom' },
-        { code: 'de', name: 'Germany' },
-        { code: 'gr', name: 'Greece' }
-      ];
-    }
-  },
-
-  async getStores(): Promise<Store[]> {
-    try {
-      const response = await apiClient.get<Store[]>('/api/stores');
-      return response.data;
-    } catch (error) {
-      console.error('API getStores error:', error);
-      // Return default stores to prevent UI crashes
-      return [
-        { code: 'amazon', name: 'Amazon', regions: ['global', 'us', 'uk', 'de'] },
-        { code: 'ebay', name: 'eBay', regions: ['global', 'us', 'uk'] },
-        { code: 'walmart', name: 'Walmart', regions: ['us'] },
-        { code: 'aliexpress', name: 'AliExpress', regions: ['global'] },
-        { code: 'bestbuy', name: 'Best Buy', regions: ['us'] }
-      ];
+      console.error('API health check failed:', error);
+      return false;
     }
   }
 };

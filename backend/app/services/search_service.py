@@ -27,9 +27,10 @@ logger = logging.getLogger(__name__)
 SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Increase the default timeout values
-DEFAULT_REQUEST_TIMEOUT = 60  # Increased from 30 to 60 seconds
-PARALLEL_REQUESTS_TIMEOUT = 90  # Added for parallel requests
+# Significantly increase timeout values to avoid timeout issues
+DEFAULT_REQUEST_TIMEOUT = 120  # Increased from 60 to 120 seconds
+PARALLEL_REQUESTS_TIMEOUT = 180  # Increased from 90 to 180 seconds
+MAX_RETRY_ATTEMPTS = 3  # Added retries for failed requests
 
 # Initialize OpenAI client
 client = None
@@ -55,6 +56,62 @@ if HAVE_SENTENCE_TRANSFORMERS:
 # Scraper API endpoint
 SCRAPER_API_URL = f"http://api.scraperapi.com/?api_key={SCRAPER_API_KEY}&url="
 
+# Enhanced URL validation with retrying
+def validate_url_with_retry(url: str, max_retries: int = 2) -> bool:
+    """
+    Validates a URL with retry logic for potentially valid but temporarily unavailable URLs
+    
+    Args:
+        url: URL to validate
+        max_retries: Maximum number of retry attempts
+        
+    Returns:
+        bool: True if URL is valid, False otherwise
+    """
+    if not url or not isinstance(url, str):
+        return False
+        
+    # Basic URL structure validation
+    try:
+        # Check if URL has a scheme and domain
+        if not (url.startswith('http://') or url.startswith('https://')):
+            return False
+            
+        # Ensure there's a domain
+        if '.' not in url.split('/')[2]:
+            return False
+            
+        # For important product URLs, try a HEAD request to verify accessibility
+        for attempt in range(max_retries):
+            try:
+                # Quick timeout for the first attempt
+                timeout = 3 if attempt == 0 else 5
+                response = requests.head(url, timeout=timeout, allow_redirects=True)
+                
+                # Handle common redirect issues
+                if 300 <= response.status_code < 400:
+                    if 'Location' in response.headers:
+                        redirect_url = response.headers['Location']
+                        # Try the redirect URL
+                        redirect_response = requests.head(redirect_url, timeout=timeout)
+                        return redirect_response.status_code < 400
+                
+                # Consider 2xx status codes as valid
+                return response.status_code < 300
+            except requests.RequestException:
+                if attempt < max_retries - 1:
+                    time.sleep(1)  # Short delay before retry
+                    continue
+                else:
+                    # On final attempt failure, still return True for URLs that look valid
+                    # This is because some sites block HEAD requests but allow GET
+                    return True
+    except Exception:
+        # If any other exception occurs, evaluate the URL format only
+        return True
+        
+    return True
+
 # Function to implement URL validation for search results
 def validate_search_results(products: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
@@ -71,23 +128,8 @@ def validate_search_results(products: List[Dict[str, Any]]) -> List[Dict[str, An
     for product in products:
         # Check if URL is present and properly formatted
         url = product.get('url')
-        if not url or not isinstance(url, str):
-            continue
-            
-        # Basic URL structure validation
-        try:
-            # Check if URL has a scheme and domain
-            if not (url.startswith('http://') or url.startswith('https://')):
-                continue
-                
-            # Ensure there's a domain
-            if '.' not in url.split('/')[2]:
-                continue
-                
-            # Add the validated product
+        if validate_url_with_retry(url):
             validated_products.append(product)
-        except:
-            continue
     
     return validated_products
 
@@ -148,62 +190,88 @@ def search_products(query, region='global', max_price=None, min_price=None,
     """
     start_time = time.time()
     
-    # Process natural language query if enabled
-    processed_query = query
-    if natural_language and use_openai and client:
-        try:
-            processed_query = process_natural_language_query(query)
-            logger.info(f"Processed natural language query: '{query}' → '{processed_query}'")
-        except Exception as e:
-            logger.error(f"Error processing natural language query: {str(e)}")
-    
-    # Determine which sites to search based on region
-    sites = get_sites_for_region(region)
-    
-    # Search all sites in parallel
-    all_products = search_multiple_sites(processed_query, sites)
-    
-    # Validate product URLs
-    all_products = validate_search_results(all_products)
-    
-    # Log the number of products found
-    logger.info(f"Collected {len(all_products)} total products from {len(sites)} sites")
-    
-    # Deduplicate products if advanced matching is enabled
-    if advanced_matching:
-        all_products = deduplicate_products(all_products)
-        logger.info(f"After deduplication: {len(all_products)} products")
-    
-    # Apply filters
-    filtered_products = filter_products(all_products, min_price, max_price)
-    
-    # Sort products
-    sorted_products = sort_products(filtered_products, sort_by)
-    
-    # Apply pagination
-    paginated_products = paginate_results(sorted_products, page, limit)
-    
-    # Compute search time
-    search_time = time.time() - start_time
-    logger.info(f"Search completed in {search_time:.2f} seconds")
-    
-    # Return results
-    return {
-        'products': paginated_products,
-        'total_results': len(filtered_products),
-        'page': page,
-        'limit': limit,
-        'search_time': round(search_time, 2),
-        'query': processed_query
-    }
+    try:
+        # Process natural language query if enabled
+        processed_query = query
+        if natural_language and use_openai and client:
+            try:
+                processed_query = process_natural_language_query(query)
+                logger.info(f"Processed natural language query: '{query}' → '{processed_query}'")
+            except Exception as e:
+                logger.error(f"Error processing natural language query: {str(e)}")
+        
+        # Determine which sites to search based on region
+        sites = get_sites_for_region(region)
+        
+        # Search all sites in parallel with improved error handling
+        all_products = search_multiple_sites(processed_query, sites)
+        
+        if not all_products:
+            logger.warning(f"No products found for query: {query}")
+            return {
+                'products': [],
+                'total_results': 0,
+                'page': page,
+                'limit': limit,
+                'search_time': round(time.time() - start_time, 2),
+                'query': processed_query,
+                'error': "No products found matching the search criteria"
+            }
+        
+        # Validate product URLs - use a more relaxed validation approach
+        all_products = validate_search_results(all_products)
+        
+        # Log the number of products found
+        logger.info(f"Collected {len(all_products)} total products from {len(sites)} sites")
+        
+        # Deduplicate products if advanced matching is enabled
+        if advanced_matching and len(all_products) > 1:
+            all_products = deduplicate_products(all_products)
+            logger.info(f"After deduplication: {len(all_products)} products")
+        
+        # Apply filters
+        filtered_products = filter_products(all_products, min_price, max_price)
+        
+        # Sort products
+        sorted_products = sort_products(filtered_products, sort_by)
+        
+        # Apply pagination
+        paginated_products = paginate_results(sorted_products, page, limit)
+        
+        # Compute search time
+        search_time = time.time() - start_time
+        logger.info(f"Search completed in {search_time:.2f} seconds")
+        
+        # Return results
+        return {
+            'products': paginated_products,
+            'total_results': len(filtered_products),
+            'page': page,
+            'limit': limit,
+            'search_time': round(search_time, 2),
+            'query': processed_query
+        }
+    except Exception as e:
+        logger.error(f"Error in search_products: {str(e)}")
+        # Return error response
+        return {
+            'products': [],
+            'total_results': 0,
+            'page': page,
+            'limit': limit,
+            'search_time': round(time.time() - start_time, 2),
+            'query': query,
+            'error': f"Search error: {str(e)}"
+        }
 
 def search_multiple_sites(query, sites):
-    """Search multiple e-commerce sites in parallel"""
+    """Search multiple e-commerce sites in parallel with better error handling"""
     all_products = []
+    successful_sites = 0
     
-    with ThreadPoolExecutor(max_workers=len(sites)) as executor:
+    with ThreadPoolExecutor(max_workers=min(len(sites), 5)) as executor:
         future_to_site = {
-            executor.submit(search_site, query, site): site 
+            executor.submit(search_site_with_retry, query, site): site 
             for site in sites
         }
         
@@ -211,13 +279,48 @@ def search_multiple_sites(query, sites):
             site = future_to_site[future]
             try:
                 products = future.result()
-                all_products.extend(products)
+                if products:
+                    all_products.extend(products)
+                    successful_sites += 1
             except Exception as e:
                 logger.error(f"Error scraping {site}: {str(e)}")
     
+    if successful_sites == 0 and sites:
+        logger.warning("No successful site searches, retrying with longer timeouts")
+        # Try again with one site but longer timeout as fallback
+        try:
+            fallback_site = sites[0]
+            fallback_products = search_site_with_retry(query, fallback_site, timeout=DEFAULT_REQUEST_TIMEOUT * 2)
+            if fallback_products:
+                all_products.extend(fallback_products)
+        except Exception as e:
+            logger.error(f"Fallback search failed: {str(e)}")
+    
     return all_products
 
-def search_site(query, site):
+def search_site_with_retry(query, site, max_retries=MAX_RETRY_ATTEMPTS, timeout=DEFAULT_REQUEST_TIMEOUT):
+    """Search a specific e-commerce site with retries"""
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            products = search_site(query, site, timeout=timeout)
+            if products:
+                return products
+            
+            # If no products found, wait before retry
+            time.sleep(1)
+        except Exception as e:
+            last_error = e
+            logger.warning(f"Attempt {attempt+1}/{max_retries} failed for {site}: {str(e)}")
+            # Exponential backoff
+            time.sleep(2 ** attempt)
+    
+    if last_error:
+        logger.error(f"All retry attempts failed for {site}: {str(last_error)}")
+    return []
+
+def search_site(query, site, timeout=DEFAULT_REQUEST_TIMEOUT):
     """Search a specific e-commerce site"""
     from .advanced_scraper import AdvancedScraper
     
@@ -248,7 +351,8 @@ def search_site(query, site):
             url, 
             country_code=country_code,
             render_js=True,
-            timeout=DEFAULT_REQUEST_TIMEOUT
+            timeout=timeout,
+            retry_count=3  # Increased retry count
         )
         
         if not html:
@@ -285,6 +389,10 @@ def search_site(query, site):
         # Add site identifier to products
         for product in products:
             product['site'] = site
+            
+            # Ensure each product has a valid URL
+            if not product.get('url'):
+                product['url'] = url
         
         logger.info(f"Added {len(products)} products from {site}")
         return products

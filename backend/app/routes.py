@@ -1,6 +1,8 @@
 from flask import Blueprint, request, jsonify
 from .services.search_service import search_products
 import logging
+import traceback
+import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -9,53 +11,88 @@ main = Blueprint('main', __name__)
 
 @main.route('/api/search', methods=['POST'])
 def search():
+    """
+    API route for searching products across multiple e-commerce platforms.
+    
+    Accepts:
+        - query: Search query string
+        - region: Region to search in (default: 'global')
+        - sort: Sorting method (default: 'relevance')
+        - page: Page number (default: 1)
+        - limit: Results per page (default: 20)
+        - min_price: Minimum price filter
+        - max_price: Maximum price filter
+        
+    Returns:
+        - JSON response with search results
+    """
     try:
+        start_time = time.time()
         data = request.get_json()
-        if not data or 'query' not in data:
-            return jsonify({'error': 'Query parameter is required'}), 400
         
-        query = data['query']
+        # Extract search parameters
+        query = data.get('query', '')
         region = data.get('region', 'global')
-        max_price = data.get('max_price')
+        sort = data.get('sort', 'relevance')
+        page = int(data.get('page', 1))
+        limit = int(data.get('limit', 20))
         min_price = data.get('min_price')
-        sort_by = data.get('sort_by', 'relevance')
-        page = data.get('page', 1)
-        limit = data.get('limit', 20)
+        max_price = data.get('max_price')
         
-        # Advanced search parameters
-        advanced_matching = data.get('advanced_matching', True)
-        use_openai = data.get('use_openai', True)
-        natural_language = data.get('natural_language', True)
+        # Log search request
+        logger.info(f"Search request: {query} (region: {region}, sort: {sort})")
         
-        # Faceted search filters
-        filters = data.get('filters', {})
-        
-        logger.info(f"Search request: {query} (region: {region}, sort: {sort_by})")
-        
+        if not query:
+            return jsonify({
+                'success': False,
+                'error': 'Query is required',
+                'products': [],
+                'total_results': 0
+            }), 400
+            
+        # Execute search with error handling
         results = search_products(
             query=query,
             region=region,
-            max_price=max_price,
-            min_price=min_price,
-            sort_by=sort_by,
+            sort_by=sort,
             page=page,
             limit=limit,
-            advanced_matching=advanced_matching,
-            use_openai=use_openai,
-            natural_language=natural_language
+            min_price=min_price,
+            max_price=max_price
         )
         
-        # Apply post-search filters
-        if filters and results['products']:
-            filtered_products = apply_filters(results['products'], filters)
-            # Update results with filtered products
-            results['products'] = filtered_products
-            results['total_results'] = len(filtered_products)
+        # Check if the search had an error
+        if 'error' in results:
+            return jsonify({
+                'success': False,
+                'error': results['error'],
+                'products': results.get('products', []),
+                'total_results': results.get('total_results', 0),
+                'search_time': results.get('search_time', 0),
+                'query': results.get('query', query),
+            }), 200
         
-        return jsonify(results)
+        # Create successful response
+        response = {
+            'success': True,
+            'products': results.get('products', []),
+            'total_results': results.get('total_results', 0),
+            'page': page,
+            'limit': limit,
+            'search_time': results.get('search_time', round(time.time() - start_time, 2)),
+            'query': results.get('query', query)
+        }
+        
+        return jsonify(response), 200
     except Exception as e:
-        logger.error(f"Search error: {str(e)}")
-        return jsonify({'error': f'Failed to process search: {str(e)}'}), 500
+        logger.error(f"Search API error: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': f"Search failed: {str(e)}",
+            'products': [],
+            'total_results': 0
+        }), 500
 
 def apply_filters(products, filters):
     """Apply filters to product results"""
@@ -152,4 +189,9 @@ def get_stores():
         return jsonify(stores)
     except Exception as e:
         logger.error(f"Get stores error: {str(e)}")
-        return jsonify({'error': f'Failed to get stores: {str(e)}'}), 500 
+        return jsonify({'error': f'Failed to get stores: {str(e)}'}), 500
+
+@main.route('/api/health', methods=['GET'])
+def health_check():
+    """Simple health check endpoint"""
+    return jsonify({'status': 'healthy', 'message': 'API is running'}), 200 

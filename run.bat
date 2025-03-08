@@ -1,32 +1,44 @@
 @echo off
-echo Starting Giorgos' Power Search Tool...
-echo.
+echo ------------------------
+echo Starting GiorgosPowerSearch
+echo ------------------------
 
-echo ------------------------
-echo Setting up environment
-echo ------------------------
-cd backend
-echo Installing backend dependencies...
-pip install -r requirements.txt
-echo.
+REM Activate the virtual environment if it exists
+if exist .venv\Scripts\activate.bat (
+    call .venv\Scripts\activate.bat
+) else (
+    echo Virtual environment not found. Creating one...
+    python -m venv .venv
+    call .venv\Scripts\activate.bat
+    echo Installing dependencies...
+    pip install -r backend/requirements.txt
+)
 
 echo ------------------------
 echo Starting backend server
 echo ------------------------
 start cmd /k "cd backend && python app.py"
-echo.
+
+echo Waiting for backend to initialize...
+timeout /t 3 /nobreak >nul
 
 echo ------------------------
 echo Starting frontend server
 echo ------------------------
-start cmd /k "cd frontend && npm install && npm start"
-echo.
+start cmd /k "cd frontend && npm start"
 
+echo ------------------------
 echo Both servers are now running!
 echo - Backend: http://localhost:5000
 echo - Frontend: http://localhost:3000
-echo.
+echo ------------------------
+
 echo Press any key to terminate both servers...
-pause
-taskkill /F /FI "WINDOWTITLE eq *app.py*"
-taskkill /F /FI "WINDOWTITLE eq *npm start*" 
+pause >nul
+
+REM Kill all server processes
+taskkill /f /im node.exe >nul 2>&1
+taskkill /f /im python.exe >nul 2>&1
+
+echo Servers terminated. Thank you for using GiorgosPowerSearch!
+timeout /t 2 >nul 

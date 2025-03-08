@@ -77,6 +77,8 @@ export interface SearchResults {
   products: Product[];
   search_context?: Record<string, any>;
   facets?: Facets;
+  success?: boolean;
+  error?: string;
 }
 
 export interface Facets {
